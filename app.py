@@ -66,52 +66,86 @@ def reset_analysis():
     st.session_state.last_feedback_type = None
 
 # ==========================================
-# 3. VERİ VE MODEL YÜKLEME (GÜVENLİ & FALLBACK)
+# 3. VERİ VE MODEL YÜKLEME (OTOMATİK KONTROL & FALLBACK)
 # ==========================================
 @st.cache_resource
 def load_model(model_path="smart_kasa_model.pkl"):
-    """Yapay zeka modelini güvenli yükler; sürüm uyuşmazlığında None döner."""
+    """Yapay zeka modelini güvenli yükler; hata durumunda None döner."""
     if not os.path.exists(model_path):
         return None
     try:
         model = joblib.load(model_path)
         return model
-    except Exception as e:
-        # Scikit-learn versiyon uyumsuzlukları vb. durumlarda uygulamanın çökmesini engeller
+    except Exception:
         return None
 
 @st.cache_data
 def load_customers(csv_path="musteri_davranis_seti.csv"):
-    """Müşteri veri setini güvenli yükler."""
+    """Müşteri veri setini güvenli yükler, dosya yoksa otomatik oluşturur."""
     if not os.path.exists(csv_path):
-        return pd.DataFrame(columns=["Musteri_ID", "Ad_Soyad", "Telefon", "Kayit_Tarihi", "Segment"])
+        # Varsayılan örnek veri seti oluştur
+        sample_data = {
+            "Musteri_ID": ["M001", "M002", "M003", "M004"],
+            "Ad_Soyad": ["Ayşe Yılmaz", "Mehmet Demir", "Zeynep Kaya", "Can Çelik"],
+            "Telefon": ["5555614226", "5321112233", "5423334455", "5339998877"],
+            "Segment": ["VIP", "Sadık Müşteri", "Standart", "Yeni Müşteri"],
+            "gecmis_ortalama_sepet_tutari": [850.0, 420.0, 310.0, 190.0],
+            "makyaj_gecen_gun": [15, 45, 10, 5],
+            "makyaj_ort_alim_araligi": [30, 30, 20, 15],
+            "makyaj_tuketim_orani": [0.8, 0.4, 0.6, 0.3],
+            "cilt_bakimi_gecen_gun": [20, 60, 15, 8],
+            "cilt_bakimi_ort_alim_araligi": [45, 45, 30, 30],
+            "cilt_bakimi_tuketim_orani": [0.7, 0.5, 0.5, 0.4]
+        }
+        df_default = pd.DataFrame(sample_data)
+        try:
+            df_default.to_csv(csv_path, index=False)
+        except Exception:
+            pass
+        return df_default
+
     try:
-        df = pd.read_csv(csv_path, dtype={'Telefon': str, 'Musteri_ID': str})
+        df = pd.read_csv(csv_path)
+        # Sütun isimlerindeki boşlukları temizle
+        df.columns = [str(c).strip() for c in df.columns]
+        
+        # Telefon ve ID sütunlarını stringe çevir
+        for col in ['Telefon', 'telefon', 'Phone', 'PHONE', 'Musteri_ID', 'musteri_id']:
+            if col in df.columns:
+                df[col] = df[col].astype(str)
         return df
-    except Exception as e:
-        return pd.DataFrame(columns=["Musteri_ID", "Ad_Soyad", "Telefon", "Kayit_Tarihi", "Segment"])
+    except Exception:
+        return pd.DataFrame()
 
 model = load_model()
 df_musteriler = load_customers()
 
+# Esnek sütun bulma yardımcı fonksiyonu
+def get_column_value(row, possible_keys, default_val=""):
+    for k in possible_keys:
+        if k in row:
+            return row[k]
+    return default_val
+
 def mask_text(text, visible_chars=2):
-    if not isinstance(text, str) or len(text) <= visible_chars:
-        return text
-    return text[:visible_chars] + "*" * (len(text) - visible_chars)
+    text_str = str(text)
+    if len(text_str) <= visible_chars:
+        return text_str
+    return text_str[:visible_chars] + "*" * (len(text_str) - visible_chars)
 
 def generate_xai_insights(secili_musteri, harcanan_tutar, secilen_kategori, proba):
     insights = []
-    segment = secili_musteri.get('Segment', 'Standart') if secili_musteri else 'Standart'
-    if segment == 'VIP':
+    segment = get_column_value(secili_musteri, ['Segment', 'segment'], 'Standart') if secili_musteri else 'Standart'
+    if 'VIP' in str(segment):
         insights.append("⭐ **VIP Müşteri Sadakati:** Müşterinin yüksek alışveriş bağlılığı ikna olasılığını artırıyor.")
-    elif 'Sadık' in segment or 'Sadik' in segment:
+    elif 'Sadık' in str(segment) or 'Sadik' in str(segment):
         insights.append("💙 **Sadık Müşteri Profili:** Düzenli mağaza ziyaretleri öneri kabul esnekliğini destekliyor.")
         
     kat_key = secilen_kategori.lower().replace(" ", "_").replace("ı", "i").replace("ş", "s").replace("ğ", "g").replace("ü", "u").replace("ö", "o")
     if secili_musteri:
-        gecen_gun = float(secili_musteri.get(f"{kat_key}_gecen_gun", 30))
-        ort_aralik = float(secili_musteri.get(f"{kat_key}_ort_alim_araligi", 30))
-        tuketim_orani = float(secili_musteri.get(f"{kat_key}_tuketim_orani", 0.5))
+        gecen_gun = float(get_column_value(secili_musteri, [f"{kat_key}_gecen_gun", "gecen_gun"], 30))
+        ort_aralik = float(get_column_value(secili_musteri, [f"{kat_key}_ort_alim_araligi", "ort_alim_araligi"], 30))
+        tuketim_orani = float(get_column_value(secili_musteri, [f"{kat_key}_tuketim_orani", "tuketim_orani"], 0.5))
         
         if gecen_gun >= ort_aralik:
             insights.append(f"⏳ **Yenileme Zamanı Gelmiş ({secilen_kategori}):** Son alımdan bu yana {int(gecen_gun)} gün geçmiş (Ort. Döngü: {int(ort_aralik)} gün).")
@@ -181,17 +215,26 @@ with tab_kasa:
         )
         
         secili_musteri = None
-        if telefon_input and not df_musteriler.empty and 'Telefon' in df_musteriler.columns:
-            match = df_musteriler[df_musteriler['Telefon'].astype(str).str.contains(telefon_input.strip(), na=False)]
+        phone_col = None
+        for col in df_musteriler.columns:
+            if col.lower() in ['telefon', 'tel', 'phone', 'gsm']:
+                phone_col = col
+                break
+                
+        if telefon_input and not df_musteriler.empty and phone_col:
+            match = df_musteriler[df_musteriler[phone_col].astype(str).str.contains(telefon_input.strip(), na=False)]
             if not match.empty:
                 secili_musteri = match.iloc[0].to_dict()
-                ad_display = mask_text(secili_musteri['Ad_Soyad']) if maskeleme_aktif else secili_musteri['Ad_Soyad']
-                st.success(f"Müşteri Bulundu: **{ad_display}** ({secili_musteri.get('Segment', 'Standart')} Segment)")
+                ad_raw = get_column_value(secili_musteri, ['Ad_Soyad', 'ad_soyad', 'Ad', 'Name', 'name'], 'Bilinmeyen Müşteri')
+                segment_raw = get_column_value(secili_musteri, ['Segment', 'segment'], 'Standart')
+                
+                ad_display = mask_text(ad_raw) if maskeleme_aktif else ad_raw
+                st.success(f"Müşteri Bulundu: **{ad_display}** ({segment_raw} Segment)")
             else:
                 st.info("ℹ️ Kayıtlı müşteri bulunamadı. Genel müşteri profili ile devam ediliyor.")
         else:
             if telefon_input:
-                st.info("ℹ️ Müşteri veri setinde 'Telefon' sütunu bulunamadı veya veri seti boş.")
+                st.info("ℹ️ Müşteri veri setinde telefon sütunu tespit edildi veya veri seti boş.")
         
         st.divider()
         
@@ -230,8 +273,7 @@ with tab_kasa:
         st.subheader("2. Yapay Zeka & Kasa Fırsat Analizi")
         
         if st.session_state.analiz_yapildi:
-            # --- TAHMİN MÜHENDİSLİĞİ (MODEL VEYA FALLBACK) ---
-            proba = 0.75 # Varsayılan fallback olasılık
+            proba = 0.75 
             if model is not None:
                 try:
                     input_dict = secili_musteri.copy() if secili_musteri else {}
@@ -251,10 +293,8 @@ with tab_kasa:
                         pred = model.predict(df_input)[0]
                         proba = 0.85 if pred == 1 else 0.35
                 except Exception:
-                    # Model tahmininde hata olursa kural tabanlı akıllı skor türetilir
                     proba = min(0.92, max(0.25, (harcanan_tutar / 1000.0) * 0.5 + (0.3 if secili_musteri else 0.1)))
             else:
-                # Model dosyası yüklenemediyse akıllı kural tabanlı simülasyon skoru üretir
                 proba = min(0.90, max(0.30, (harcanan_tutar / 800.0) * 0.6 + 0.2))
 
             st.markdown("#### 🎯 Müşteri Ek Satın Alma İkna Olasılığı")
@@ -272,7 +312,6 @@ with tab_kasa:
 
             st.divider()
 
-            # --- XAI KARAR GEREKÇELERİ ---
             st.markdown("#### 🔍 Yapay Zeka Karar Gerekçeleri")
             xai_list = generate_xai_insights(secili_musteri, harcanan_tutar, secilen_kategori, proba)
             
@@ -284,7 +323,6 @@ with tab_kasa:
 
             st.divider()
 
-            # --- ÇAPRAZ SATIŞ & UPSELL ÖNERİLERİ ---
             st.markdown("#### 💡 Kasiyer İçin Anlık Aksiyon Önerileri")
             
             if harcanan_tutar < 500:
@@ -307,7 +345,6 @@ with tab_kasa:
 
             st.divider()
 
-            # --- FEEDBACK LOOP ---
             st.markdown("#### 🔄 Müşteri Yanıtı Kaydı (Feedback Loop)")
             st.caption("Kasiyer teklifi sunduktan sonra müşterinin kararını kaydedin.")
             
@@ -357,22 +394,27 @@ with tab_analitik:
     st.divider()
 
     if not df_musteriler.empty:
-        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        col_m1, col_m2, col_m3, _ = st.columns(4)
         col_m1.metric("Toplam Kayıtlı Müşteri", len(df_musteriler))
-        vip_count = len(df_musteriler[df_musteriler['Segment'].astype(str).str.contains('VIP', na=False)]) if 'Segment' in df_musteriler.columns else 0
-        col_m2.metric("VIP Müşteri Sayısı", vip_count)
         
-        avg_sepet = df_musteriler['gecmis_ortalama_sepet_tutari'].mean() if 'gecmis_ortalama_sepet_tutari' in df_musteriler.columns else 0.0
-        col_m1.metric("Ort. Harcama Tutarı", f"{avg_sepet:.1f} TL")
+        segment_col = None
+        for col in df_musteriler.columns:
+            if col.lower() == 'segment':
+                segment_col = col
+                break
+                
+        vip_count = len(df_musteriler[df_musteriler[segment_col].astype(str).str.contains('VIP', na=False)]) if segment_col else 0
+        col_m2.metric("VIP Müşteri Sayısı", vip_count)
         
         st.divider()
         st.markdown("##### 📄 Mevcut Müşteri Veri Tablosu")
         df_display = df_musteriler.copy()
         if maskeleme_aktif:
-            if 'Ad_Soyad' in df_display.columns:
-                df_display['Ad_Soyad'] = df_display['Ad_Soyad'].apply(lambda x: mask_text(str(x)))
-            if 'Telefon' in df_display.columns:
-                df_display['Telefon'] = df_display['Telefon'].apply(lambda x: mask_text(str(x), 4))
+            for col in df_display.columns:
+                if 'ad' in col.lower() or 'name' in col.lower():
+                    df_display[col] = df_display[col].apply(lambda x: mask_text(str(x)))
+                if 'telefon' in col.lower() or 'tel' in col.lower() or 'phone' in col.lower():
+                    df_display[col] = df_display[col].apply(lambda x: mask_text(str(x), 4))
             
         st.dataframe(df_display, use_container_width=True, hide_index=True)
     else:
