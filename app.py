@@ -4,208 +4,407 @@ import numpy as np
 import joblib
 import os
 
-# --- SAYFA YAPILANDIRMASI ---
+# ==========================================
+# 1. SAYFA YAPILANDIRMASI & TEMA
+# ==========================================
 st.set_page_config(
-    page_title="Smart Checkout AI | Akıllı Kasa Asistanı",
+    page_title="Smart Checkout AI - Kasa Asistanı",
     page_icon="🛒",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# --- MODEL VE VERİ YÜKLEME ---
+# Custom CSS Stilleri
+st.markdown("""
+    <style>
+    .main-header {
+        font-size: 26px;
+        font-weight: bold;
+        color: #1E3A8A;
+        margin-bottom: 10px;
+    }
+    .xai-box {
+        background-color: #F0FDF4;
+        border-left: 4px solid #16A34A;
+        padding: 12px 18px;
+        border-radius: 8px;
+        margin-top: 10px;
+        margin-bottom: 10px;
+    }
+    .xai-box-low {
+        background-color: #FEF2F2;
+        border-left: 4px solid #DC2626;
+        padding: 12px 18px;
+        border-radius: 8px;
+        margin-top: 10px;
+        margin-bottom: 10px;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# 2. SESSION STATE İLKLEME & CALLBACKS
+# ==========================================
+if "total_recommendations" not in st.session_state:
+    st.session_state.total_recommendations = 0
+if "accepted_recommendations" not in st.session_state:
+    st.session_state.accepted_recommendations = 0
+if "rejected_recommendations" not in st.session_state:
+    st.session_state.rejected_recommendations = 0
+if "ai_generated_revenue" not in st.session_state:
+    st.session_state.ai_generated_revenue = 0.0
+if "analiz_yapildi" not in st.session_state:
+    st.session_state.analiz_yapildi = False
+if "last_feedback_msg" not in st.session_state:
+    st.session_state.last_feedback_msg = None
+if "last_feedback_type" not in st.session_state:
+    st.session_state.last_feedback_type = None
+
+# Girdiler değiştiğinde analizi ve bildirimleri sıfırlayan callback
+def reset_analysis():
+    st.session_state.analiz_yapildi = False
+    st.session_state.last_feedback_msg = None
+    st.session_state.last_feedback_type = None
+
+# ==========================================
+# 3. VERİ VE MODEL YÜKLEME (CACHED)
+# ==========================================
 @st.cache_resource
-def load_model():
-    model_path = "smart_kasa_model.pkl"
-    if os.path.exists(model_path):
-        try:
-            return joblib.load(model_path)
-        except Exception:
-            return None
-    return None
+def load_model(model_path="smart_kasa_model.pkl"):
+    """Yapay zeka modelini güvenli bir şekilde yükler."""
+    if not os.path.exists(model_path):
+        st.error(f"❌ Model dosyası bulunamadı: `{model_path}`. Lütfen dosyanın proje dizininde olduğundan emin olun.")
+        return None
+    try:
+        model = joblib.load(model_path)
+        return model
+    except Exception as e:
+        st.error(f"❌ Model yüklenirken hata oluştu: {str(e)}")
+        return None
 
 @st.cache_data
-def load_dataset():
-    data_path = "musteri-davranis-seti.csv"
-    if os.path.exists(data_path):
-        try:
-            return pd.read_csv(data_path)
-        except Exception:
-            return None
-    # Dosya yoksa örnek fallback veri seti oluşturalım
-    return pd.DataFrame({
-        "Musteri_ID": [1001, 1002, 1003],
-        "Ad_Soyad": ["Fatma Yılmaz", "Fatma Çelik", "Ahmet Kaya"],
-        "Telefon": ["5555614226", "5552458591", "5334903402"],
-        "Kayit_Tarihi": ["2024-09-07", "2025-08-27", "2025-06-01"],
-        "Segment": ["Sadık Müşteri", "Yeni Müşteri", "Yeni Müşteri"],
-        "musteri_kidem_gun": [688, 334, 421],
-        "gecmis_islem_sayisi": [14, 7, 5],
-        "gecmis_ortalama_sepet_tutari": [403.2, 231.76, 207.43]
-    })
+def load_customers(csv_path="musteri_davranis_seti.csv"):
+    """Müşteri veri setini yükler."""
+    if not os.path.exists(csv_path):
+        st.warning(f"⚠️ `{csv_path}` bulunamadı.")
+        return pd.DataFrame(columns=["Musteri_ID", "Ad_Soyad", "Telefon", "Kayit_Tarihi", "Segment"])
+    try:
+        df = pd.read_csv(csv_path, dtype={'Telefon': str, 'Musteri_ID': str})
+        return df
+    except Exception as e:
+        st.error(f"❌ Müşteri verisi okunurken hata oluştu: {str(e)}")
+        return pd.DataFrame()
 
 model = load_model()
-df = load_dataset()
+df_musteriler = load_customers()
 
-# Session State başlatma (Canlı sayaçlar için)
-if "sunulan_oneri" not in st.session_state:
-    st.session_state.sunulan_oneri = 0
-if "kabul_edilen_oneri" not in st.session_state:
-    st.session_state.kabul_edilen_oneri = 0
-if "ek_ciro" not in st.session_state:
-    st.session_state.ek_ciro = 0.0
+# Maskeleme Fonksiyonu (KVKK Uyumu)
+def mask_text(text, visible_chars=2):
+    if not isinstance(text, str) or len(text) <= visible_chars:
+        return text
+    return text[:visible_chars] + "*" * (len(text) - visible_chars)
 
-# --- YAN MENÜ (SIDEBAR) ---
-st.sidebar.markdown("🛒 **Smart Checkout AI**")
-st.sidebar.caption("Retail AI Assistant")
-st.sidebar.markdown("---")
+# XAI (Explainable AI) Karar Gerekçesi Oluşturucu
+def generate_xai_insights(secili_musteri, harcanan_tutar, secilen_kategori, proba):
+    insights = []
+    
+    segment = secili_musteri.get('Segment', 'Standart') if secili_musteri else 'Standart'
+    if segment == 'VIP':
+        insights.append("⭐ **VIP Müşteri Sadakati:** Müşterinin yüksek alışveriş bağlılığı ikna olasılığını artırıyor.")
+    elif 'Sadık' in segment or 'Sadik' in segment:
+        insights.append("💙 **Sadık Müşteri Profili:** Düzenli mağaza ziyaretleri öneri kabul esnekliğini destekliyor.")
+        
+    kat_key = secilen_kategori.lower().replace(" ", "_").replace("ı", "i").replace("ş", "s").replace("ğ", "g").replace("ü", "u").replace("ö", "o")
+    if secili_musteri:
+        gecen_gun = float(secili_musteri.get(f"{kat_key}_gecen_gun", 30))
+        ort_aralik = float(secili_musteri.get(f"{kat_key}_ort_alim_araligi", 30))
+        tuketim_orani = float(secili_musteri.get(f"{kat_key}_tuketim_orani", 0.5))
+        
+        if gecen_gun >= ort_aralik:
+            insights.append(f"⏳ **Yenileme Zamanı Gelmiş ({secilen_kategori}):** Son alımdan bu yana {int(gecen_gun)} gün geçmiş (Ort. Döngü: {int(ort_aralik)} gün). Müşterinin bu ürüne ihtiyacı yüksek.")
+        if tuketim_orani > 0.6:
+            insights.append(f"📈 **Yüksek Tüketim Skoru:** Müşterinin {secilen_kategori} kategorisindeki geçmiş tüketim oranı (%{tuketim_orani*100:.0f}) yüksek.")
+            
+    if harcanan_tutar >= 500:
+        insights.append(f"💰 **Yüksek Alışveriş Hacmi:** {harcanan_tutar:.0f} TL tutarındaki sepet, müşterinin ek tekliflere açık olduğunu gösteriyor.")
+    elif harcanan_tutar < 200:
+        insights.append("⚠️ **Düşük Sepet Tutarı:** Müşteri hassas bir bütçeyle alışveriş yapıyor olabilir.")
+        
+    if secili_musteri:
+        islem_sayisi = float(secili_musteri.get('gecmis_islem_sayisi', 5))
+        if islem_sayisi > 15:
+            insights.append(f"🔄 **Sık Alışveriş Yapan Müşteri:** Geçmişteki {int(islem_sayisi)} başarılı işlem güven indeksini yükseltiyor.")
+            
+    if not insights:
+        insights.append("ℹ️ Genel sepet ortalamaları ve mağaza içi standart müşteri profil davranışları esas alındı.")
+        
+    return insights
 
-maskeleme_modu = st.sidebar.toggle("🔒 Maskeleme Modu", value=False)
-st.sidebar.info("Sistem, kasa anında akıllı çapraz satış ve müşteri ikna olasılığı tahmini üretir.")
+# ==========================================
+# 4. YAN MENÜ (SIDEBAR) & CANLI METRİKLER
+# ==========================================
+with st.sidebar:
+    st.image("https://img.icons8.com/color/96/000000/checkout.png", width=70)
+    st.title("Smart Checkout AI")
+    st.caption("Retail AI Assistant")
+    st.divider()
+    
+    maskeleme_aktif = st.toggle("🔒 Maskeleme Modu", value=False)
+    st.info("Sistem, kasa anında akıllı çapraz satış ve müşteri ikna olasılığı tahmini üretir.")
+    
+    st.divider()
+    st.markdown("**Sistem Durumu:**")
+    if model is not None:
+        st.success("🟢 AI Modeli Aktif (`XGBoost`)")
+    else:
+        st.error("🔴 AI Modeli Pasif")
+        
+    st.divider()
+    st.markdown("**📈 Canlı Kasa Performansı (ROI):**")
+    st.metric("Ek Ciro Katkısı", f"{st.session_state.ai_generated_revenue:.2f} TL")
+    acc_rate = (st.session_state.accepted_recommendations / st.session_state.total_recommendations * 100) if st.session_state.total_recommendations > 0 else 0.0
+    st.metric("Kasa Dönüşüm Oranı", f"%{acc_rate:.1f}")
 
-st.sidebar.markdown("### **Sistem Durumu:**")
-if model is not None:
-    st.sidebar.success("🟢 AI Modeli Aktif (XGBoost)")
-else:
-    st.sidebar.warning("🟡 Model Dosyası Bulunamadı (Demo Modu)")
+# ==========================================
+# 5. ANA EKRAN VE SEKMELER
+# ==========================================
+st.title("🛒 Akıllı Kasa Asistanı & Öneri Motoru")
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 📈 **Canlı Kasa Performansı (ROI):**")
-st.sidebar.metric("Ek Ciro Katkısı", f"{st.session_state.ek_ciro:.2f} TL")
-
-donusum_orani = (st.session_state.kabul_edilen_oneri / st.session_state.sunulan_oneri * 100) if st.session_state.sunulan_oneri > 0 else 0.0
-st.sidebar.metric("Kasa Dönüşüm Oranı", f"%{donusum_orani:.1f}")
-
-# --- ANA BAŞLIK ---
-st.markdown("## 🛒 Akıllı Kasa Asistanı & Öneri Motoru")
-
-# --- SEKMELER (TABS) ---
-tab_kasa, tab_analitik, tab_kayit = st.tabs([
-    "🛒 Kasa İşlem Ekranı", 
+tab_kasa, tab_analitik, tab_yeni_musteri = st.tabs([
+    "🛍️ Kasa İşlem Ekranı", 
     "📊 Müşteri & Mağaza Analitiği", 
     "➕ Yeni Müşteri Kaydı"
 ])
 
-# ================= TAB 1: KASA İŞLEM EKRANI =================
+# ------------------------------------------
+# TAB 1: KASA İŞLEM EKRANI
+# ------------------------------------------
 with tab_kasa:
-    col_islem1, col_islem2 = st.columns([1.2, 1])
+    col_left, col_right = st.columns([1, 1.2], gap="large")
 
-    with col_islem1:
+    with col_left:
         st.subheader("1. Müşteri & Sepet Bilgileri")
         
-        telefon_input = st.text_input("📱 Müşteri Telefon No (Örn: 5555614226):", value="5555614226")
-
-        # Müşteri veritabanında arama
-        bulunan_musteri = None
-        if df is not None and "Telefon" in df.columns:
-            eslesenler = df[df["Telefon"].astype(str) == telefon_input.strip()]
-            if not eslesenler.empty:
-                bulunan_musteri = eslesenler.iloc[0]
-
-        if bulunan_musteri is not None:
-            ad_soyad = bulunan_musteri.get("Ad_Soyad", "Bilinmeyen Müşteri")
-            segment = bulunan_musteri.get("Segment", "Standart")
-            st.success(f"Müşteri Bulundu: **{ad_soyad}** ({segment} Segment)")
-        else:
-            st.warning("⚠️ Müşteri veritabanında bulunamadı. Yeni müşteri olarak işlem yapılacak.")
-
-        st.markdown("---")
+        telefon_input = st.text_input(
+            "📱 Müşteri Telefon No (Örn: 5555614226):", 
+            value="5555614226",
+            key="input_tel",
+            on_change=reset_analysis
+        )
         
-        # Sepet Detayları
-        sepet_tutari = st.number_input("💰 Anlık Sepet Tutarı (TL):", min_value=0.0, max_value=50000.0, value=350.0, step=10.0)
-        sepetteki_urun_adedi = st.slider("📦 Sepetteki Ürün Adedi:", min_value=1, max_value=20, value=3)
+        secili_musteri = None
+        if telefon_input and not df_musteriler.empty:
+            match = df_musteriler[df_musteriler['Telefon'].astype(str).str.contains(telefon_input.strip(), na=False)]
+            if not match.empty:
+                secili_musteri = match.iloc[0].to_dict()
+                ad_display = mask_text(secili_musteri['Ad_Soyad']) if maskeleme_aktif else secili_musteri['Ad_Soyad']
+                st.success(f"Müşteri Bulundu: **{ad_display}** ({secili_musteri.get('Segment', 'Standart')} Segment)")
+            else:
+                st.info("ℹ️ Kayıtlı müşteri bulunamadı. Genel müşteri profili ile devam ediliyor.")
         
-        kategori_secenekleri = [
-            "Makyaj", "Cilt Bakımı", "Saç Bakımı", "Parfüm", 
-            "Vücut Bakımı & Banyo", "El & Ayak Bakımı", "Güneş & Bronzlaşma", 
-            "Aksesuar & Güzellik Aletleri", "Erkek Bakım"
-        ]
-        agirlikli_kategori = st.selectbox("🏷️ Sepetteki Ağırlıklı Kategori:", kategori_secenekleri)
+        st.divider()
+        
+        harcanan_tutar = st.number_input(
+            "💰 Anlık Sepet Tutarı (TL):", 
+            min_value=10.0, 
+            max_value=10000.0, 
+            value=350.0, 
+            step=10.0,
+            key="input_tutar",
+            on_change=reset_analysis
+        )
+        sepetteki_urun = st.slider(
+            "📦 Sepetteki Ürün Adedi:", 
+            min_value=1, 
+            max_value=20, 
+            value=3,
+            key="input_urun",
+            on_change=reset_analysis
+        )
+        
+        kategoriler = ["Makyaj", "Cilt Bakımı", "Ağız Bakımı", "Parfüm", "Saç Bakımı", "Satış Sonrası Bakım"]
+        secilen_kategori = st.selectbox(
+            "🏷️ Sepetteki Ağırlıklı Kategori:", 
+            kategoriler,
+            key="input_kat",
+            on_change=reset_analysis
+        )
+        
+        if st.button("⚡ AI Önerilerini ve Tahmini Hesapla", type="primary", use_container_width=True):
+            st.session_state.analiz_yapildi = True
+            st.session_state.last_feedback_msg = None
+            st.session_state.last_feedback_type = None
 
-        hesapla_btn = st.button("⚡ AI Önerilerini ve Tahmini Hesapla", use_container_width=True, type="primary")
-
-    with col_islem2:
+    with col_right:
         st.subheader("2. Yapay Zeka & Kasa Fırsat Analizi")
-
-        if not hesapla_btn:
-            st.info("👉 Önerileri ve XAI detaylarını görmek için lütfen sol taraftaki 'AI Önerilerini ve Tahmini Hesapla' butonuna basın.")
-        else:
-            st.session_state.sunulan_oneri += 1
-            
-            # Öneri Belirleme (Kategoriye göre akıllı eşleşme)
-            tavsiye_sozlugu = {
-                "Makyaj": ("Maskara (Lash Lift Etkili)", 0.78, 149.90),
-                "Cilt Bakımı": ("Hyaluronik Asit Cilt Serumu", 0.82, 299.90),
-                "Saç Bakımı": ("Argan Yağlı Saç Bakım Maskesi", 0.65, 189.90),
-                "Parfüm": ("Vücut Spreyi (Body Mist)", 0.71, 120.00),
-                "Vücut Bakımı & Banyo": ("Besleyici Duş Jeli", 0.58, 95.00),
-                "El & Ayak Bakımı": ("Onarıcı El Kremi", 0.74, 75.00),
-                "Güneş & Bronzlaşma": ("Yüz Güneş Kremi SPF 50+", 0.85, 340.00),
-                "Aksesuar & Güzellik Aletleri": ("Gua Sha Masaj Taşı", 0.62, 110.00),
-                "Erkek Bakım": ("Sakal ve Bıyık Bakım Yağı", 0.69, 150.00)
-            }
-            
-            onerilen_urun, olasilik, urun_fiyati = tavsiye_sozlugu.get(agirlikli_kategori, ("Özel Bakım Ürünü", 0.70, 150.00))
-
-            st.markdown(f"### 🎯 Önerilen Çapraz Satış Ürünü")
-            st.success(f"**{onerilen_urun}**")
-            
-            st.metric("İkna / Kabul Olasılığı", f"%{olasilik * 100:.1f}")
-            
-            col_aks1, col_aks2 = st.columns(2)
-            if col_aks1.button("✅ Teklifi Kabul Et", use_container_width=True):
-                st.session_state.kabul_edilen_oneri += 1
-                st.session_state.ek_ciro += urun_fiyati
-                st.success("Satış başarıyla sepete eklendi!")
-                st.rerun()
+        
+        if st.session_state.analiz_yapildi:
+            if model is None:
+                st.error("Model yüklü olmadığı için tahmin yapılamıyor.")
+            else:
+                # --- A. YENİ ESNEK FEATURE VEKTÖRÜNÜ HAZIRLAMA ---
+                # Yeni veri setindeki (musteri_davranis_seti.csv) tüm kolonları dinamik olarak içeriye dahil eder
+                input_dict = secili_musteri.copy() if secili_musteri else {}
                 
-            if col_aks2.button("❌ Teklifi Reddet", use_container_width=True):
-                st.info("Teklif reddedildi, kasa işlemi tamamlanıyor.")
+                # Arayüzden gelen canlı kasa değerlerini özellik setine dahil et
+                input_dict["Harcanan_Tutar_TL"] = harcanan_tutar
+                input_dict["Sepet_Tutari_TL"] = harcanan_tutar  # Geriye dönük model isim uyumluluğu için
+                input_dict["Sepetteki_Urun_Adedi"] = sepetteki_urun
+                input_dict["Onerilen_Kategori"] = secilen_kategori
+                
+                # Model pipeline'ının kullanabilmesi için DataFrame oluşturuluyor
+                df_input = pd.DataFrame([input_dict])
+                
+                # Modelin tam olarak beklediği inputları pipeline üzerinden kontrol et
+                expected_features = getattr(model, "feature_names_in_", None)
+                if expected_features is not None:
+                    # Dataset'te eksik bir özellik varsa hatayı önlemek için varsayılan değerle doldur
+                    df_input = df_input.reindex(columns=expected_features, fill_value=0)
+                
+                # --- B. AI TAHMİNİ ÇALIŞTIRMA ---
+                try:
+                    if hasattr(model, "predict_proba"):
+                        proba = model.predict_proba(df_input)[0][1]
+                    else:
+                        pred = model.predict(df_input)[0]
+                        proba = 0.85 if pred == 1 else 0.35
+                    
+                    st.markdown("#### 🎯 Müşteri Ek Satın Alma İkna Olasılığı")
+                    c1, c2 = st.columns([1, 2])
+                    with c1:
+                        st.metric(label="Tahmin Skoru", value=f"%{proba * 100:.1f}")
+                    with c2:
+                        st.progress(float(proba))
+                        if proba >= 0.70:
+                            st.caption("🔥 **Yüksek Potansiyel:** Müşteri kasada ek önerilere çok açık.")
+                        elif proba >= 0.40:
+                            st.caption("🟡 **Orta Potansiyel:** Standart kasa fırsat ürünleri sunulabilir.")
+                        else:
+                            st.caption("⚪ **Düşük Potansiyel:** Hızlı işlem tamamlanması önerilir.")
+                except Exception as e:
+                    st.warning(f"Model tahmini sırasında uyarı: {str(e)}.")
+                    proba = 0.50
 
+                st.divider()
 
-# ================= TAB 2: MÜŞTERİ & MAĞAZA ANALİTİĞİ =================
+                # --- C. ÖZELLİK 1: AÇIKLANABİLİR YAPAY ZEKA (XAI) ---
+                st.markdown("#### 🔍 Yapay Zeka Karar Gerekçeleri")
+                xai_list = generate_xai_insights(secili_musteri, harcanan_tutar, secilen_kategori, proba)
+                
+                box_style = "xai-box" if proba >= 0.5 else "xai-box-low"
+                st.markdown(f'<div class="{box_style}">', unsafe_allow_html=True)
+                for item in xai_list:
+                    st.markdown(f"- {item}")
+                st.markdown('</div>', unsafe_allow_html=True)
+
+                st.divider()
+
+                # --- D. AKILLI ÇAPRAZ SATIŞ & UPSELL ÖNERİ MOTORU ---
+                st.markdown("#### 💡 Kasiyer İçin Anlık Aksiyon Önerileri")
+                
+                if harcanan_tutar < 500:
+                    kalan = 500 - harcanan_tutar
+                    st.info(f"🎁 **Kampanya Fırsatı:** Sepete **{kalan:.2f} TL** daha eklendiğinde 50 TL Kasa İndirimi kazanılıyor!")
+                elif harcanan_tutar >= 500 and harcanan_tutar < 1000:
+                    st.success("🎉 Müşteri 500 TL üzeri kargo/indirim limitine ulaştı! VIP hediye çeki sunulabilir.")
+
+                oneriler = {
+                    "Makyaj": ("Makyaj Temizleme Suyu & Pamuk Seti", 49.90),
+                    "Cilt Bakımı": ("Güneş Koruyucu Krem (SPF 50+)", 129.00),
+                    "Ağız Bakımı": ("Çalkalama Suyu & Diş İpi Combo", 39.90),
+                    "Parfüm": ("Cep Boy Seyahat Parfüm Şişesi", 29.90),
+                    "Saç Bakımı": ("Durulanmayan Saç Bakım Yağı", 79.90),
+                    "Satış Sonrası Bakım": ("Nemlendirici El & Vücut Losyonu", 34.90)
+                }
+                
+                oneri_urun, oneri_fiyat = oneriler.get(secilen_kategori, ("Kasa Önü Minis Ürünler", 19.90))
+                st.warning(f"👉 **Önerilen Kasa Önü Ürünü:** {oneri_urun} — **Özel Fiyat:** {oneri_fiyat:.2f} TL")
+
+                st.divider()
+
+                # --- E. ÖZELLİK 3: CANLI GERİ BİLDİRİM DÖNGÜSÜ (FEEDBACK LOOP) ---
+                st.markdown("#### 🔄 Müşteri Yanıtı Kaydı (Feedback Loop)")
+                st.caption("Kasiyer teklifi sunduktan sonra müşterinin kararını kaydedin. Bu veriler MLOps & ROI analizini besler.")
+                
+                # Kalıcı görsel bildirim kutusu
+                if st.session_state.last_feedback_msg:
+                    if st.session_state.last_feedback_type == "success":
+                        st.success(st.session_state.last_feedback_msg)
+                    else:
+                        st.info(st.session_state.last_feedback_msg)
+                
+                fb_col1, fb_col2 = st.columns(2)
+                
+                with fb_col1:
+                    if st.button("✅ Müşteri Öneriyi Kabul Etti", use_container_width=True, type="secondary"):
+                        st.session_state.total_recommendations += 1
+                        st.session_state.accepted_recommendations += 1
+                        st.session_state.ai_generated_revenue += oneri_fiyat
+                        st.session_state.last_feedback_msg = f"🎉 **Kabul Kaydedildi:** Sepete +{oneri_fiyat:.2f} TL eklendi! Sol menüdeki ROI metrikleri güncellendi."
+                        st.session_state.last_feedback_type = "success"
+                        st.rerun()
+                        
+                with fb_col2:
+                    if st.button("❌ Müşteri Öneriyi Reddetti", use_container_width=True):
+                        st.session_state.total_recommendations += 1
+                        st.session_state.rejected_recommendations += 1
+                        st.session_state.last_feedback_msg = "ℹ️ **Red Kaydedildi:** Yanıt model iyileştirme veri havuzuna aktarıldı."
+                        st.session_state.last_feedback_type = "info"
+                        st.rerun()
+
+        else:
+            st.info("👈 Önerileri ve XAI detaylarını görmek için lütfen sol taraftaki **'AI Önerilerini ve Tahmini Hesapla'** butonuna basın.")
+
+# ------------------------------------------
+# TAB 2: MÜŞTERİ & MAĞAZA ANALİTİĞİ
+# ------------------------------------------
 with tab_analitik:
     st.subheader("📊 Müşteri Veri Seti & Mağaza Özet Analizleri")
     
     st.markdown("### 💰 AI Katma Değer & İş Etkisi")
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Toplam Sunulan Öneri", st.session_state.sunulan_oneri)
-    m2.metric("Kabul Edilen Öneri", st.session_state.kabul_edilen_oneri)
-    m3.metric("Kasa Dönüşüm Oranı", f"%{donusum_orani:.1f}")
-    m4.metric("AI Kaynaklı Ek Ciro", f"{st.session_state.ek_ciro:.2f} TL")
+    
+    roi1, roi2, roi3, roi4 = st.columns(4)
+    roi1.metric("Toplam Sunulan Öneri", st.session_state.total_recommendations)
+    roi2.metric("Kabul Edilen Öneri", st.session_state.accepted_recommendations)
+    
+    conv_rate = (st.session_state.accepted_recommendations / st.session_state.total_recommendations * 100) if st.session_state.total_recommendations > 0 else 0.0
+    roi3.metric("Kasa Dönüşüm Oranı", f"%{conv_rate:.1f}")
+    roi4.metric("AI Kaynaklı Ek Ciro", f"{st.session_state.ai_generated_revenue:.2f} TL")
+    
+    st.divider()
 
-    st.markdown("---")
-    
-    m5, m6, m7, m8 = st.columns(4)
-    m5.metric("Toplam Kayıtlı Müşteri", len(df) if df is not None else 350)
-    m6.metric("VIP Müşteri Sayısı", len(df[df["Segment"] == "VIP"]) if df is not None and "Segment" in df.columns else 0)
-    
-    ortalama_harcama = df["gecmis_ortalama_sepet_tutari"].mean() if df is not None and "gecmis_ortalama_sepet_tutari" in df.columns else 249.3
-    m7.metric("Ort. Harcama Tutarı", f"{ortalama_harcama:.1f} TL")
-    
-    ortalama_kidem = df["musteri_kidem_gun"].mean() if df is not None and "musteri_kidem_gun" in df.columns else 615.0
-    m8.metric("Ort. Müşteri Kıdemi", f"{int(ortalama_kidem)} Gün")
-
-    st.markdown("---")
-    st.subheader("📋 Mevcut Müşteri Veri Tablosu")
-    if df is not None:
-        st.dataframe(df, use_container_width=True)
+    if not df_musteriler.empty:
+        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        col_m1.metric("Toplam Kayıtlı Müşteri", len(df_musteriler))
+        col_m2.metric("VIP Müşteri Sayısı", len(df_musteriler[df_musteriler['Segment'].astype(str).str.contains('VIP')]))
+        col_m3.metric("Ort. Harcama Tutarı", f"{df_musteriler['gecmis_ortalama_sepet_tutari'].mean():.1f} TL" if 'gecmis_ortalama_sepet_tutari' in df_musteriler else "N/A")
+        col_m4.metric("Ort. Müşteri Kıdemi", f"{df_musteriler['musteri_kidem_gun'].mean():.0f} Gün" if 'musteri_kidem_gun' in df_musteriler else "N/A")
+        
+        st.divider()
+        st.markdown("##### 📄 Mevcut Müşteri Veri Tablosu")
+        
+        df_display = df_musteriler.copy()
+        if maskeleme_aktif:
+            df_display['Ad_Soyad'] = df_display['Ad_Soyad'].apply(lambda x: mask_text(str(x)))
+            df_display['Telefon'] = df_display['Telefon'].apply(lambda x: mask_text(str(x), 4))
+            
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
     else:
-        st.info("Görüntülenecek veri bulunamadı.")
+        st.warning("Görüntülenecek müşteri verisi bulunamadı.")
 
-
-# ================= TAB 3: YENİ MÜŞTERİ KAYDI =================
-with tab_kayit:
-    st.subheader("➕ Yeni Müşteri Kaydı Formu")
-    
-    with st.form("yeni_musteri_formu"):
-        yeni_ad = st.text_input("Ad Soyad:")
-        yeni_telefon = st.text_input("Telefon No:")
-        yeni_segment = st.selectbox("Segment:", ["Yeni Müşteri", "Sadık Müşteri", "VIP", "Potansiyel Müşteri"])
+# ------------------------------------------
+# TAB 3: YENİ MÜŞTERİ KAYDI
+# ------------------------------------------
+with tab_yeni_musteri:
+    st.subheader("➕ Yeni Müşteri Ekleme Formu")
+    with st.form("yeni_musteri_formu", clear_on_submit=True):
+        f_ad = st.text_input("Ad Soyad:")
+        f_tel = st.text_input("Telefon No:")
+        f_segment = st.selectbox("Segment:", ["Yeni Müşteri", "Standart Müşteri", "Sadık Müşteri", "VIP Müşteri"])
         
-        kaydet_buton = st.form_submit_button("Müşteriyi Kaydet", type="primary")
-        
-        if kaydet_buton:
-            if yeni_ad and yeni_telefon:
-                st.success(f"✅ Başarılı: {yeni_ad} isimli müşteri sisteme kaydedildi!")
+        submit_btn = st.form_submit_button("Müşteriyi Kaydet")
+        if submit_btn:
+            if f_ad and f_tel:
+                st.success(f"✅ Müşteri `{f_ad}` başarıyla eklendi! (Simülasyon)")
             else:
-                st.error("Lütfen ad soyad ve telefon bilgilerini eksiksiz doldurun.")
+                st.error("Lütfen Ad Soyad ve Telefon alanlarını doldurun.")
