@@ -81,21 +81,27 @@ def load_model(model_path="smart_kasa_model.pkl"):
 
 @st.cache_data
 def load_customers(csv_path="musteri_davranis_seti.csv"):
-    """Müşteri veri setini güvenli yükler, dosya yoksa otomatik oluşturur."""
+    """Müşteri veri setini güvenli yükler, dosya yoksa gerçek şemaya uygun
+    küçük bir örnek veri seti oluşturur."""
     if not os.path.exists(csv_path):
-        # Varsayılan örnek veri seti oluştur
+        # Varsayılan örnek veri seti oluştur (gerçek musteri_davranis_seti.csv şemasıyla uyumlu)
         sample_data = {
-            "Musteri_ID": ["M001", "M002", "M003", "M004"],
+            "Musteri_ID": ["MST-00001", "MST-00002", "MST-00003", "MST-00004"],
             "Ad_Soyad": ["Ayşe Yılmaz", "Mehmet Demir", "Zeynep Kaya", "Can Çelik"],
-            "Telefon": ["5555614226", "5321112233", "5423334455", "5339998877"],
-            "Segment": ["VIP", "Sadık Müşteri", "Standart", "Yeni Müşteri"],
-            "gecmis_ortalama_sepet_tutari": [850.0, 420.0, 310.0, 190.0],
-            "makyaj_gecen_gun": [15, 45, 10, 5],
-            "makyaj_ort_alim_araligi": [30, 30, 20, 15],
-            "makyaj_tuketim_orani": [0.8, 0.4, 0.6, 0.3],
-            "cilt_bakimi_gecen_gun": [20, 60, 15, 8],
-            "cilt_bakimi_ort_alim_araligi": [45, 45, 30, 30],
-            "cilt_bakimi_tuketim_orani": [0.7, 0.5, 0.5, 0.4]
+            "Cinsiyet": ["Kadın", "Erkek", "Kadın", "Erkek"],
+            "Yas_Grubu": ["25-34", "35-49", "18-24", "50+"],
+            "Magaza_Tipi": ["AVM", "Cadde", "AVM", "Cadde"],
+            "Mevsim": ["Yaz", "Kış", "İlkbahar", "Sonbahar"],
+            "Hafta_Ici_Hafta_Sonu": [0, 1, 0, 1],
+            "Islem_Saati_Dilimi": ["Öğle", "Akşam", "Sabah", "Gece"],
+            "Sadakat_Puani": [3800, 2200, 1500, 600],
+            "Promosyon_Hassasiyeti_Skoru": [0.7, 0.4, 0.6, 0.3],
+            "Gecen_Gun_Sayisi": [15, 45, 10, 5],
+            "Coklu_Kategori_Alim_Skoru": [0.8, 0.4, 0.6, 0.3],
+            "Sepet_Tutari_TL": [850.0, 420.0, 310.0, 190.0],
+            "Onerilen_Kategori": ["Makyaj", "Cilt Bakımı", "Saç Bakımı", "Parfüm"],
+            "Onerilen_Urun": ["Göz Farı", "Misel Su", "Kuru Şampuan", "EDT Parfüm"],
+            "Teklif_Kabul": [1, 0, 1, 0],
         }
         df_default = pd.DataFrame(sample_data)
         try:
@@ -105,11 +111,13 @@ def load_customers(csv_path="musteri_davranis_seti.csv"):
         return df_default
 
     try:
-        df = pd.read_csv(csv_path)
+        # encoding='utf-8-sig': dosyanın başında BOM olsa bile ilk sütun adı
+        # ('Musteri_ID') bozulmadan okunur; BOM yoksa da zararsızdır.
+        df = pd.read_csv(csv_path, encoding="utf-8-sig")
         # Sütun isimlerindeki boşlukları temizle
         df.columns = [str(c).strip() for c in df.columns]
-        
-        # Telefon ve ID sütunlarını stringe çevir
+
+        # Telefon ve ID sütunlarını stringe çevir (varsa)
         for col in ['Telefon', 'telefon', 'Phone', 'PHONE', 'Musteri_ID', 'musteri_id']:
             if col in df.columns:
                 df[col] = df[col].astype(str)
@@ -119,6 +127,100 @@ def load_customers(csv_path="musteri_davranis_seti.csv"):
 
 model = load_model()
 df_musteriler = load_customers()
+
+# ==========================================
+# 3.1 MODEL ŞEMASI SABİTLERİ
+# ==========================================
+# 'Onerilen_Kategori' görünen adı <-> sütun öneki (örn. "Cilt Bakımı" -> "Cilt_Bakimi").
+# Modelin gerçekten eğitildiği 10 kategori burada; XAI açıklamaları ve öneri
+# sözlüğü bu tek kaynaktan besleniyor.
+KATEGORI_KOLON_ONEKI = {
+    "Makyaj": "Makyaj",
+    "Cilt Bakımı": "Cilt_Bakimi",
+    "Ağız Bakımı": "Agiz_Bakimi",
+    "Parfüm": "Parfum",
+    "Saç Bakımı": "Sac_Bakimi",
+    "Vücut Bakımı & Banyo": "Vucut_Bakimi_Banyo",
+    "El & Ayak Bakımı": "El_Ayak_Bakimi",
+    "Güneş & Bronzlaşma": "Gunes_Bronzlasma",
+    "Aksesuar & Güzellik Aletleri": "Aksesuar_Guzellik_Aletleri",
+    "Erkek Bakım": "Erkek_Bakim",
+}
+
+# Her kategori için önerilecek kasa-önü ürünü ve fiyatı. Ekranda gösterilen
+# ürünle modele giden 'Onerilen_Urun' özelliği burada TEK bir kaynaktan
+# geldiği için her zaman tutarlı olur (eğitim verisindeki en sık görülen
+# ürün seçildi).
+KATEGORI_URUN_ONERI = {
+    "Makyaj": ("Göz Farı", 79.90),
+    "Cilt Bakımı": ("Misel Su", 69.90),
+    "Ağız Bakımı": ("Ağız Çalkalama Suyu", 44.90),
+    "Parfüm": ("Vücut Spreyi (Body Mist)", 59.90),
+    "Saç Bakımı": ("Kuru Şampuan", 64.90),
+    "Vücut Bakımı & Banyo": ("Banyo Bombası", 29.90),
+    "El & Ayak Bakımı": ("Aseton", 24.90),
+    "Güneş & Bronzlaşma": ("Aloe Vera Jeli", 39.90),
+    "Aksesuar & Güzellik Aletleri": ("Gua Sha Taşı", 89.90),
+    "Erkek Bakım": ("Tıraş Köpüğü", 54.90),
+}
+
+_MODEL_SAYISAL_KOLONLAR = [
+    "Sadakat_Puani", "Promosyon_Hassasiyeti_Skoru", "Gecen_Gun_Sayisi",
+    "Coklu_Kategori_Alim_Skoru", "Sepet_Tutari_TL",
+]
+for _onek in KATEGORI_KOLON_ONEKI.values():
+    _MODEL_SAYISAL_KOLONLAR += [
+        f"{_onek}_Alisveris_Sayisi", f"Gecen_Gun_{_onek}",
+        f"{_onek}_Ort_Alim_Araligi", f"{_onek}_Tuketim_Orani",
+    ]
+_MODEL_KATEGORIK_KOLONLAR = [
+    "Cinsiyet", "Yas_Grubu", "Magaza_Tipi", "Mevsim",
+    "Islem_Saati_Dilimi", "Hafta_Ici_Hafta_Sonu",
+]
+
+
+def build_default_profile(df):
+    """Kayıtlı/eşleşen bir müşteri olmadığında modele SIFIRLAR yerine bu
+    genel (medyan/en sık değer) profili veriyoruz; aksi halde tahmin sessizce
+    anlamsızlaşır (44/53 özellik sıfırlanmış olurdu)."""
+    profil = {}
+    if df is None or df.empty:
+        return profil
+    for col in _MODEL_SAYISAL_KOLONLAR:
+        if col in df.columns:
+            deger = df[col].median()
+            profil[col] = deger if pd.notna(deger) else 0
+    for col in _MODEL_KATEGORIK_KOLONLAR:
+        if col in df.columns and not df[col].mode().empty:
+            profil[col] = df[col].mode().iloc[0]
+    return profil
+
+
+GENEL_MUSTERI_PROFILI = build_default_profile(df_musteriler)
+
+# VIP/Sadık Müşteri ayrımı için: bu veri setinde 'Segment' sütunu yok, bu
+# yüzden gerçekte var olan 'Sadakat_Puani' üzerinden (üst %25 / medyan üstü)
+# türetiyoruz.
+if not df_musteriler.empty and "Sadakat_Puani" in df_musteriler.columns:
+    VIP_ESIK_DEGERI = df_musteriler["Sadakat_Puani"].quantile(0.75)
+    SADIK_ESIK_DEGERI = df_musteriler["Sadakat_Puani"].median()
+else:
+    VIP_ESIK_DEGERI = 0
+    SADIK_ESIK_DEGERI = 0
+
+
+def musteri_segment_belirle(sadakat_puani):
+    """Sadakat_Puani'na göre VIP / Sadık Müşteri / Standart etiketi üretir."""
+    try:
+        puan = float(sadakat_puani)
+    except (TypeError, ValueError):
+        return "Standart"
+    if puan >= VIP_ESIK_DEGERI:
+        return "VIP"
+    if puan >= SADIK_ESIK_DEGERI:
+        return "Sadık Müşteri"
+    return "Standart"
+
 
 # Esnek sütun bulma yardımcı fonksiyonu
 def get_column_value(row, possible_keys, default_val=""):
@@ -135,19 +237,23 @@ def mask_text(text, visible_chars=2):
 
 def generate_xai_insights(secili_musteri, harcanan_tutar, secilen_kategori, proba):
     insights = []
-    segment = get_column_value(secili_musteri, ['Segment', 'segment'], 'Standart') if secili_musteri else 'Standart'
-    if 'VIP' in str(segment):
+    sadakat_puani = get_column_value(secili_musteri, ['Sadakat_Puani'], None) if secili_musteri else None
+    segment = musteri_segment_belirle(sadakat_puani) if sadakat_puani is not None else 'Standart'
+    if segment == 'VIP':
         insights.append("⭐ **VIP Müşteri Sadakati:** Müşterinin yüksek alışveriş bağlılığı ikna olasılığını artırıyor.")
-    elif 'Sadık' in str(segment) or 'Sadik' in str(segment):
+    elif segment == 'Sadık Müşteri':
         insights.append("💙 **Sadık Müşteri Profili:** Düzenli mağaza ziyaretleri öneri kabul esnekliğini destekliyor.")
-        
-    kat_key = secilen_kategori.lower().replace(" ", "_").replace("ı", "i").replace("ş", "s").replace("ğ", "g").replace("ü", "u").replace("ö", "o")
-    if secili_musteri:
-        gecen_gun = float(get_column_value(secili_musteri, [f"{kat_key}_gecen_gun", "gecen_gun"], 30))
-        ort_aralik = float(get_column_value(secili_musteri, [f"{kat_key}_ort_alim_araligi", "ort_alim_araligi"], 30))
-        tuketim_orani = float(get_column_value(secili_musteri, [f"{kat_key}_tuketim_orani", "tuketim_orani"], 0.5))
-        
-        if gecen_gun >= ort_aralik:
+
+    # Gerçek sütun adları "{Kategori}_Ort_Alim_Araligi" ve "Gecen_Gun_{Kategori}"
+    # şeklindedir (ikincisi ÖNEK olarak, diğerleri SONEK olarak). KATEGORI_KOLON_ONEKI
+    # üzerinden doğru case/sırada üretiyoruz; aksi halde hiçbir zaman eşleşmez.
+    kat_onek = KATEGORI_KOLON_ONEKI.get(secilen_kategori)
+    if secili_musteri and kat_onek:
+        gecen_gun = float(get_column_value(secili_musteri, [f"Gecen_Gun_{kat_onek}"], 30))
+        ort_aralik = float(get_column_value(secili_musteri, [f"{kat_onek}_Ort_Alim_Araligi"], 30))
+        tuketim_orani = float(get_column_value(secili_musteri, [f"{kat_onek}_Tuketim_Orani"], 0.5))
+
+        if ort_aralik > 0 and gecen_gun >= ort_aralik:
             insights.append(f"⏳ **Yenileme Zamanı Gelmiş ({secilen_kategori}):** Son alımdan bu yana {int(gecen_gun)} gün geçmiş (Ort. Döngü: {int(ort_aralik)} gün).")
         if tuketim_orani > 0.6:
             insights.append(f"📈 **Yüksek Tüketim Skoru:** Müşterinin {secilen_kategori} kategorisindeki geçmiş tüketim oranı (%{tuketim_orani*100:.0f}) yüksek.")
