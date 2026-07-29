@@ -69,7 +69,7 @@ def reset_analysis():
 # 3. VERİ VE MODEL YÜKLEME (CACHED)
 # ==========================================
 @st.cache_resource
-def load_model(model_path="kasa_model.pkl"):
+def load_model(model_path="smart_kasa_model.pkl"):
     """Yapay zeka modelini güvenli bir şekilde yükler."""
     if not os.path.exists(model_path):
         st.error(f"❌ Model dosyası bulunamadı: `{model_path}`. Lütfen dosyanın proje dizininde olduğundan emin olun.")
@@ -82,8 +82,8 @@ def load_model(model_path="kasa_model.pkl"):
         return None
 
 @st.cache_data
-def load_customers(csv_path="guncel_musteriler.csv"):
-    """Güncel müşteri veri setini yükler. Eski musteriler.csv yerine yeni seti kullanır."""
+def load_customers(csv_path="musteri_davranis_seti.csv"):
+    """Güncel müşteri veri setini yükler."""
     if not os.path.exists(csv_path):
         st.warning(f"⚠️ `{csv_path}` bulunamadı.")
         return pd.DataFrame(columns=["Musteri_ID", "Ad_Soyad", "Telefon", "Kayit_Tarihi", "Segment"])
@@ -115,7 +115,6 @@ def generate_xai_insights(secili_musteri, harcanan_tutar, secilen_kategori, prob
     kat_key = secilen_kategori.lower().replace(" ", "_").replace("ı", "i").replace("ş", "s").replace("ğ", "g").replace("ü", "u").replace("ö", "o")
     
     if secili_musteri:
-        # Yeni veri setindeki dinamik sütunları kontrol et
         gecen_gun_col = f"{kat_key}_gecen_gun"
         ort_aralik_col = f"{kat_key}_ort_alim_araligi"
         tuketim_orani_col = f"{kat_key}_tuketim_orani"
@@ -254,21 +253,17 @@ with tab_kasa:
                     "Sepetteki_Urun_Adedi": sepetteki_urun
                 }
                 
-                # Seçili müşterinin tüm sayısal verilerini input_dict'e aktar
                 if secili_musteri:
                     for key, value in secili_musteri.items():
                         try:
-                            # Sadece sayısal modele uygun verileri dahil et
                             input_dict[key] = float(value)
                         except (ValueError, TypeError):
                             pass
                 
                 df_input = pd.DataFrame([input_dict])
                 
-                # Modelin tam olarak beklediği özellikleri dinamik olarak çek ve hizala
                 expected_features = getattr(model, "feature_names_in_", None)
                 if expected_features is not None:
-                    # Modelde olup veride olmayan sütunları 0 ile doldur, fazlalıkları at
                     df_input = df_input.reindex(columns=expected_features, fill_value=0.0)
                 
                 # --- B. AI TAHMİNİ ÇALIŞTIRMA ---
