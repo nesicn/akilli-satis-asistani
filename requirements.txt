@@ -1,6 +1,6 @@
-streamlit==1.60.0
-pandas: 3.0.2
-numpy==2.5.1
+scikit-learn==1.6.1
+xgboost==3.3.0
+pandas==2.2.2
+numpy==2.0.2
 joblib==1.5.3
-sklearn: 1.8.0
-xgboost: 3.3.0
+streamlit
