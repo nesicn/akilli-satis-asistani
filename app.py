@@ -716,32 +716,30 @@ with tab_analitik:
 # TAB 3: YENİ MÜŞTERİ KAYDI (SQLITE ENTEGRELİ)
 # ------------------------------------------
 with tab_yeni_musteri:
-    st.subheader("➕ Veritabanına Yeni Müşteri Ekle")
-    st.caption("Yeni kaydedilen müşteriler otomatik olarak nüfus-geneli ortalama profiliyle başlatılır ve model sütunlarıyla tam uyumlu hale getirilir.")
+    st.subheader("➕ Yeni Müşteri Kayıt Formu")
+    st.caption("Buradan eklenen müşteriler anında SQLite veritabanına yazılır ve kasa ekranından telefon/ID ile sorgulanabilir.")
 
-    with st.form("yeni_musteri_form"):
+    with st.form("yeni_musteri_formu", clear_on_submit=True):
+        f_ad = st.text_input("Ad Soyad:")
+        f_tel = st.text_input("Telefon No (Örn: 05551234567):")
         col_f1, col_f2 = st.columns(2)
         with col_f1:
-            yeni_ad = st.text_input("Ad Soyad:", placeholder="Örn. Ayşe Yılmaz")
-            yeni_tel = st.text_input("Telefon Numarası:", placeholder="Örn. 05551234567")
-            yeni_segment = st.selectbox("Başlangıç Segmenti:", ["Yeni Müşteri", "Standart Müşteri", "Sadık Müşteri", "VIP Müşteri"])
-            yeni_cinsiyet = st.selectbox("Cinsiyet:", ["Kadın", "Erkek", "Diğer"])
+            f_cinsiyet = st.selectbox("Cinsiyet:", ["Kadın", "Erkek"])
+            f_magaza = st.selectbox("Mağaza Tipi:", ["AVM", "Cadde"])
         with col_f2:
-            yeni_yas = st.selectbox("Yaş Grubu:", ["18-25", "26-35", "36-50", "50+"])
-            yeni_magaza = st.selectbox("Mağaza Tipi:", ["AVM", "Cadde", "Pop-up", "Online"])
-            yeni_mevsim = st.selectbox("Mevsim:", ["İlkbahar", "Yaz", "Sonbahar", "Kış"])
+            f_yas = st.selectbox("Yaş Grubu:", ["18-24", "25-34", "35-49", "50+"])
+            f_mevsim = st.selectbox("Kayıt Mevsimi:", ["Yaz", "Kış", "İlkbahar", "Sonbahar"])
+        f_segment = st.selectbox("Müşteri Segmenti:", ["Yeni Müşteri", "Standart Müşteri", "Sadık Müşteri", "VIP Müşteri"])
 
-        submit_form = st.form_submit_button("💾 Müşteriyi Veritabanına Kaydet", type="primary")
+        submit_btn = st.form_submit_button("💾 Müşteriyi Veritabanına Kaydet")
 
-        if submit_form:
-            if not yeni_ad.strip() or not yeni_tel.strip():
-                st.error("❌ Lütfen Ad Soyad ve Telefon numarası alanlarını doldurun!")
-            else:
-                basari, mesaj, olusturulan_id = yeni_musteri_ekle(
-                    yeni_ad, yeni_tel, yeni_segment, yeni_cinsiyet,
-                    yeni_yas, yeni_magaza, yeni_mevsim, GENEL_MUSTERI_PROFILI
-                )
+        if submit_btn:
+            if f_ad and f_tel:
+                basari, mesaj, yeni_id = yeni_musteri_ekle(f_ad, f_tel, f_segment, f_cinsiyet, f_yas, f_magaza, f_mevsim, GENEL_MUSTERI_PROFILI)
                 if basari:
-                    st.success(f"🎉 {mesaj} (Atanan Müşteri ID: `{olusturulan_id}`)")
+                    st.success(f"✅ {mesaj} (Müşteri: {f_ad} — ID: {yeni_id})")
+                    st.cache_data.clear()
                 else:
-                    st.error(f"❌ {mesaj}")
+                    st.error(f"⚠️ {mesaj}")
+            else:
+                st.warning("Lütfen Ad Soyad ve Telefon alanlarını boş bırakmayın.")
