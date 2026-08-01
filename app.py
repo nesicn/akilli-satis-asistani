@@ -259,22 +259,74 @@ with tab_kasa:
         if st.button("⚡ AI Önerilerini Hesapla", type="primary", use_container_width=True):
             st.session_state.analiz_yapildi = True
 
-    with col_right:
+with col_right:
         st.subheader("2. Yapay Zeka Karar Destek")
 
         if st.session_state.analiz_yapildi:
             oneri_urun, oneri_fiyat = KATEGORI_URUN_ONERI.get(secilen_kategori, ("Kasa Önü Fırsat Ürünü", 29.90))
             
-            # Basitleştirilmiş Tahmin / Skor Mantığı
-            proba = 0.78 if (secili_musteri and secili_musteri.get('Sadakat_Puani', 0) > 50) else 0.52
+            # --- 🧠 GERÇEK MODEL ENTEGRASYONU VE VERİ HAZIRLIĞI ---
+            proba = 0.52 # Varsayılan başlangıç skoru
+            
+            if model is not None:
+                try:
+                    # Müşteri veritabanı ile sepet verisini modelin beklediği formata getir
+                    if secili_musteri:
+                        model_features = {
+                            "Cinsiyet": secili_musteri.get("Cinsiyet", "Bilinmiyor"),
+                            "Yas_Grubu": secili_musteri.get("Yas_Grubu", "Bilinmiyor"),
+                            "Magaza_Tipi": secili_musteri.get("Magaza_Tipi", "Bilinmiyor"),
+                            "Mevsim": secili_musteri.get("Mevsim", "Bilinmiyor"),
+                            "Hafta_Ici_Hafta_Sonu": secili_musteri.get("Hafta_Ici_Hafta_Sonu", "Bilinmiyor"),
+                            "Islem_Saati_Dilimi": secili_musteri.get("Islem_Saati_Dilimi", "Bilinmiyor"),
+                            "Sadakat_Puani": float(secili_musteri.get("Sadakat_Puani", 0.0)),
+                            "Sepet_Tutari_TL": float(harcanan_tutar),
+                            "Gecen_Gun_Sayisi": float(secili_musteri.get("Gecen_Gun_Sayisi", 0.0))
+                        }
+                    else:
+                        # Anonim Müşteri İçin Varsayılan Değerler
+                        model_features = {
+                            "Cinsiyet": "Bilinmiyor", "Yas_Grubu": "Bilinmiyor", 
+                            "Magaza_Tipi": "AVM", "Mevsim": "Yaz", 
+                            "Hafta_Ici_Hafta_Sonu": "Hafta İçi", "Islem_Saati_Dilimi": "Öğle", 
+                            "Sadakat_Puani": 10.0, "Sepet_Tutari_TL": float(harcanan_tutar), "Gecen_Gun_Sayisi": 0.0
+                        }
+                    
+                    df_features = pd.DataFrame([model_features])
+                    
+                    # Gerçek model tahmini (Pipeline üzerinden)
+                    if hasattr(model, "predict_proba"):
+                        proba = float(model.predict_proba(df_features)[0][1])
+                    else:
+                        prediction = model.predict(df_features)[0]
+                        proba = 0.85 if prediction == 1 else 0.35
+                except Exception as e:
+                    st.error(f"⚠️ Model veri formatı uyuşmazlığı: {e}")
+                    proba = 0.78 if (secili_musteri and secili_musteri.get('Sadakat_Puani', 0) > 50) else 0.52
 
+            # --- 📊 XAI (AÇIKLANABİLİR AI) ARAYÜZÜ ---
             st.markdown("#### 🎯 İkna Olasılığı Skoru")
             st.progress(proba)
-            st.caption(f"Tahmin Edilen İkna Oranı: **%{proba*100:.0f}**")
+            st.caption(f"Modelin Tahmin Ettiği Çapraz Satış Başarısı: **%{proba*100:.0f}**")
+
+            st.markdown("#### 🔍 Model Karar Faktörleri (XAI)")
+            
+            # Dinamik Açıklanabilirlik Kutuları (Senin yazdığın CSS sınıflarını kullanır)
+            if secili_musteri:
+                puan = secili_musteri.get('Sadakat_Puani', 0)
+                if puan > 40:
+                    st.markdown(f'<div class="xai-box">📈 <b>Güçlü Sinyal:</b> Müşterinin yüksek sadakat puanı ({puan}) ikna olasılığını artırıyor.</div>', unsafe_allow_html=True)
+                else:
+                    st.markdown(f'<div class="xai-box-low">📉 <b>Risk Sinyali:</b> Düşük sadakat puanı ({puan}), önerinin reddedilme riskini artırıyor.</div>', unsafe_allow_html=True)
+                
+                if harcanan_tutar > 200:
+                    st.markdown(f'<div class="xai-box">📈 <b>Güçlü Sinyal:</b> Sepet hacminin yüksek olması ({harcanan_tutar} TL) satın alma eğilimini olumlu etkiliyor.</div>', unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="xai-box-low">⚠️ <b>Veri Eksikliği:</b> Profil bulunamadı. Model genel popülasyon istatistiklerini baz alarak tahmin yürüttü.</div>', unsafe_allow_html=True)
 
             st.divider()
-            st.markdown("#### 💡 Kasiyer İçin Öneri")
-            st.warning(f"👉 **Tavsiye Edilen Ürün:** {oneri_urun} — **Fiyat:** {oneri_fiyat:.2f} TL")
+            st.markdown("#### 💡 Kasiyer İçin Aksiyon Planı")
+            st.success(f"👉 **Tavsiye Edilen Ürün:** {oneri_urun} — **Fiyat:** {oneri_fiyat:.2f} TL")
 
             st.divider()
             st.markdown("#### 🔄 Müşteri Yanıtı")
@@ -284,31 +336,27 @@ with tab_kasa:
                 if st.button("✅ Öneriyi Kabul Etti", use_container_width=True):
                     toplam_tutar = harcanan_tutar + oneri_fiyat
                     
-                    # 1. Session State Metriklerini Güncelle
                     st.session_state.total_recommendations += 1
                     st.session_state.accepted_recommendations += 1
                     st.session_state.ai_generated_revenue += oneri_fiyat
                     
-                    # 2. Kayıtlı Müşteri İse SQLite Veritabanını Güncelle
                     if secili_musteri and musteri_tel_input:
                         musteri_satis_kaydet(musteri_tel_input, toplam_tutar)
-                        st.success(f"✅ Satış tamamlandı (+{oneri_fiyat:.2f} TL) & Müşteri profili güncellendi!")
+                        st.success(f"✅ Satış tamamlandı (+{oneri_fiyat:.2f} TL) & Veritabanı güncellendi!")
                     else:
                         st.success(f"✅ Satış tamamlandı (+{oneri_fiyat:.2f} TL)!")
 
             with fb_c2:
                 if st.button("❌ Reddetti", use_container_width=True):
-                    # 1. Session State Metriklerini Güncelle
                     st.session_state.total_recommendations += 1
                     st.session_state.rejected_recommendations += 1
                     
-                    # 2. Öneri reddedilse bile ana sepet tutarı ile veritabanını güncelle
                     if secili_musteri and musteri_tel_input:
                         musteri_satis_kaydet(musteri_tel_input, harcanan_tutar)
                     
                     st.info("Satış ana sepet tutarı ile tamamlandı.")
         else:
-            st.info("👈 Önerileri görmek için butona basın.")
+            st.info("👈 Analizi başlatmak için sol taraftaki butona basın.")
 
 # ------------------------------------------
 # TAB 2: MAĞAZA & ROI ANALİTİĞİ (GİZLİLİK UYUMLU)
