@@ -69,11 +69,6 @@ def reset_analysis():
 # ==========================================
 # 3. VERİ VE MODEL YÜKLEME (CACHED)
 # ==========================================
-# GÜNCELLEME NOTU: Proje "akıllı" (2. nesil) veri setine taşındı.
-#   Eski model : kasa_model.pkl          + musteriler.csv      (6 kategori)
-#   Yeni model : smart_kasa_model.pkl    + musteri_davranis_seti.csv (10 kategori, 53 özellik)
-# Arayüz (sekmeler, kartlar, XAI kutuları, feedback akışı) BİREBİR korunmuştur;
-# sadece arka plandaki veri/model bağlantısı yeni şemaya göre düzeltilmiştir.
 MODEL_YOLU = "smart_kasa_model.pkl"
 MUSTERI_CSV_YOLU = "musteri_davranis_seti.csv"
 
@@ -95,15 +90,14 @@ def load_model(model_path=MODEL_YOLU):
 @st.cache_data
 def load_customers(csv_path=MUSTERI_CSV_YOLU):
     """Müşteri veri setini yükler.
-
-    encoding='utf-8-sig': dosyanın başında BOM (byte order mark) olsa bile
-    ilk sütun adı ('Musteri_ID') bozulmadan okunur; BOM yoksa da zararsızdır.
+    
+    'telefon' sütunu dahil edilmiştir.
     """
     if not os.path.exists(csv_path):
         st.warning(f"⚠️ `{csv_path}` bulunamadı.")
-        return pd.DataFrame(columns=["Musteri_ID", "Ad_Soyad"])
+        return pd.DataFrame(columns=["Musteri_ID", "telefon", "Ad_Soyad"])
     try:
-        df = pd.read_csv(csv_path, encoding="utf-8-sig", dtype={"Musteri_ID": str})
+        df = pd.read_csv(csv_path, encoding="utf-8-sig", dtype={"Musteri_ID": str, "telefon": str})
         df.columns = [str(c).strip() for c in df.columns]
         return df
     except Exception as e:
@@ -115,11 +109,8 @@ model = load_model()
 df_musteriler = load_customers()
 
 # ==========================================
-# 3.1 MODEL ŞEMASI SABİTLERİ (smart_kasa_model.pkl ile birebir uyumlu)
+# 3.1 MODEL ŞEMASI SABİTLERİ
 # ==========================================
-# 'Onerilen_Kategori' görünen adı <-> sütun öneki (örn. "Cilt Bakımı" -> "Cilt_Bakimi").
-# Modelin eğitildiği 10 kategori burada tanımlı; XAI açıklamaları ve kasa-önü
-# ürün önerisi TEK bu kaynaktan besleniyor (tutarlılık için).
 KATEGORI_KOLON_ONEKI = {
     "Makyaj": "Makyaj",
     "Cilt Bakımı": "Cilt_Bakimi",
@@ -133,9 +124,6 @@ KATEGORI_KOLON_ONEKI = {
     "Erkek Bakım": "Erkek_Bakim",
 }
 
-# Her kategori için kasa önünde önerilecek ürün ve fiyatı. Ekranda gösterilen
-# ürünle modele giden 'Onerilen_Urun' özelliği TEK bir kaynaktan geldiği için
-# her zaman tutarlıdır (eğitim verisindeki en sık görülen ürün seçildi).
 KATEGORI_URUN_ONERI = {
     "Makyaj": ("Göz Farı", 79.90),
     "Cilt Bakımı": ("Misel Su", 69.90),
@@ -165,9 +153,6 @@ _MODEL_KATEGORIK_KOLONLAR = [
 
 
 def build_default_profile(df):
-    """Kayıtlı/eşleşen bir müşteri olmadığında modele SIFIRLAR yerine bu
-    genel (medyan/en sık değer) profili veriyoruz; aksi halde tahmin sessizce
-    anlamsızlaşır (özelliklerin büyük kısmı sıfırlanmış olurdu)."""
     profil = {}
     if df is None or df.empty:
         return profil
@@ -183,9 +168,6 @@ def build_default_profile(df):
 
 GENEL_MUSTERI_PROFILI = build_default_profile(df_musteriler)
 
-# VIP / Sadık Müşteri ayrımı: bu veri setinde ayrı bir 'Segment' sütunu yok,
-# bu yüzden gerçekten var olan 'Sadakat_Puani' üzerinden (üst %25 / medyan
-# üstü) türetiyoruz. Eşikler veriye göre otomatik hesaplanır.
 if not df_musteriler.empty and "Sadakat_Puani" in df_musteriler.columns:
     VIP_ESIK_DEGERI = df_musteriler["Sadakat_Puani"].quantile(0.75)
     SADIK_ESIK_DEGERI = df_musteriler["Sadakat_Puani"].median()
@@ -193,8 +175,6 @@ else:
     VIP_ESIK_DEGERI = 0
     SADIK_ESIK_DEGERI = 0
 
-# "Sık alışveriş yapan müşteri" XAI içgörüsü için eşik: tüm kategorilerdeki
-# alışveriş sayıları toplamının üst %25'i (veriye göre otomatik kalibre edilir).
 if not df_musteriler.empty:
     _alisveris_kolonlari = [f"{onek}_Alisveris_Sayisi" for onek in KATEGORI_KOLON_ONEKI.values() if f"{onek}_Alisveris_Sayisi" in df_musteriler.columns]
     SIK_ALISVERIS_ESIGI = df_musteriler[_alisveris_kolonlari].sum(axis=1).quantile(0.75) if _alisveris_kolonlari else 15
@@ -203,7 +183,6 @@ else:
 
 
 def musteri_segment_belirle(sadakat_puani):
-    """Sadakat_Puani'na göre VIP / Sadık Müşteri / Standart etiketi üretir."""
     try:
         puan = float(sadakat_puani)
     except (TypeError, ValueError):
@@ -215,14 +194,12 @@ def musteri_segment_belirle(sadakat_puani):
     return "Standart"
 
 
-# Maskeleme Fonksiyonu (KVKK Uyumu)
 def mask_text(text, visible_chars=2):
     if not isinstance(text, str) or len(text) <= visible_chars:
         return text
     return text[:visible_chars] + "*" * (len(text) - visible_chars)
 
 
-# XAI (Explainable AI) Karar Gerekçesi Oluşturucu
 def generate_xai_insights(secili_musteri, harcanan_tutar, secilen_kategori, proba):
     insights = []
 
@@ -233,9 +210,6 @@ def generate_xai_insights(secili_musteri, harcanan_tutar, secilen_kategori, prob
     elif segment == 'Sadık Müşteri':
         insights.append("💙 **Sadık Müşteri Profili:** Düzenli mağaza ziyaretleri öneri kabul esnekliğini destekliyor.")
 
-    # Gerçek sütun adları "{Kategori}_Ort_Alim_Araligi" / "{Kategori}_Tuketim_Orani"
-    # (SONEK) ve "Gecen_Gun_{Kategori}" (ÖNEK) şeklindedir. KATEGORI_KOLON_ONEKI
-    # üzerinden doğru case/sırada üretiyoruz; aksi halde hiçbir zaman eşleşmez.
     kat_onek = KATEGORI_KOLON_ONEKI.get(secilen_kategori)
     if secili_musteri and kat_onek:
         gecen_gun = float(secili_musteri.get(f"Gecen_Gun_{kat_onek}", 30) or 30)
@@ -253,9 +227,6 @@ def generate_xai_insights(secili_musteri, harcanan_tutar, secilen_kategori, prob
         insights.append("⚠️ **Düşük Sepet Tutarı:** Müşteri hassas bir bütçeyle alışveriş yapıyor olabilir.")
 
     if secili_musteri:
-        # Toplam alışveriş sayısı artık tüm kategorilerdeki "_Alisveris_Sayisi"
-        # sütunlarının toplamından türetiliyor (eski 'gecmis_islem_sayisi' sütunu
-        # bu veri setinde yok, ama karşılığı budur).
         toplam_alisveris = sum(
             float(secili_musteri.get(f"{onek}_Alisveris_Sayisi", 0) or 0)
             for onek in KATEGORI_KOLON_ONEKI.values()
@@ -316,18 +287,19 @@ with tab_kasa:
     with col_left:
         st.subheader("1. Müşteri & Sepet Bilgileri")
 
-        # NOT: Bu veri setinde telefon numarası yok; müşteri araması artık
-        # gerçekten var olan ve benzersiz olan Musteri_ID üzerinden yapılıyor.
-        musteri_id_input = st.text_input(
-            "🆔 Müşteri ID (Örn: MST-00001):",
-            value="MST-00001",
-            key="input_musteri_id",
+        # GÜNCELLEME: Müşteri araması 'telefon' numarası ile yapılıyor.
+        musteri_tel_input = st.text_input(
+            "📱 Müşteri Telefon No (Örn: 0532xxxxxxx):",
+            value="",
+            placeholder="05xxxxxxxxx",
+            key="input_musteri_tel",
             on_change=reset_analysis
         )
 
         secili_musteri = None
-        if musteri_id_input and not df_musteriler.empty and "Musteri_ID" in df_musteriler.columns:
-            match = df_musteriler[df_musteriler["Musteri_ID"].astype(str).str.contains(musteri_id_input.strip(), case=False, na=False)]
+        if musteri_tel_input and not df_musteriler.empty and "telefon" in df_musteriler.columns:
+            # Telefon numarası ile arama
+            match = df_musteriler[df_musteriler["telefon"].astype(str).str.contains(musteri_tel_input.strip(), case=False, na=False)]
             if not match.empty:
                 secili_musteri = match.iloc[0].to_dict()
                 ad_display = mask_text(secili_musteri.get('Ad_Soyad', 'Bilinmeyen Müşteri')) if maskeleme_aktif else secili_musteri.get('Ad_Soyad', 'Bilinmeyen Müşteri')
@@ -376,14 +348,16 @@ with tab_kasa:
             if model is None:
                 st.error("Model yüklü olmadığı için tahmin yapılamıyor.")
             else:
-                # --- A. FEATURE VEKTÖRÜNÜ HAZIRLAMA (53 ÖZELLİKLİ MODEL MİMARİSİ) ---
-                # Eşleşen müşteri varsa onun GERÇEK geçmiş davranış profiliyle,
-                # yoksa veri setinin genel (medyan/mod) profiliyle başlıyoruz;
-                # böylece "genel müşteri profili" mesajı gerçekten doğru olur
-                # (sıfırlarla değil).
+                # --- A. FEATURE VEKTÖRÜNÜ HAZIRLAMA ---
                 oneri_urun, oneri_fiyat = KATEGORI_URUN_ONERI.get(secilen_kategori, ("Kasa Önü Minis Ürünler", 19.90))
 
                 input_dict = dict(secili_musteri) if secili_musteri else dict(GENEL_MUSTERI_PROFILI)
+                
+                # Modelin eğitilmediği, tahmin sırasında hata verecek kimlik/metadata 
+                # bilgilerini tahmin verisinden (input_dict) siliyoruz.
+                for kimlik_kolon in ["Musteri_ID", "telefon", "Ad_Soyad"]:
+                    input_dict.pop(kimlik_kolon, None)
+
                 input_dict["Sepet_Tutari_TL"] = harcanan_tutar
                 input_dict["Onerilen_Kategori"] = secilen_kategori
                 input_dict["Onerilen_Urun"] = oneri_urun
@@ -449,7 +423,6 @@ with tab_kasa:
                 st.markdown("#### 🔄 Müşteri Yanıtı Kaydı (Feedback Loop)")
                 st.caption("Kasiyer teklifi sunduktan sonra müşterinin kararını kaydedin. Bu veriler MLOps & ROI analizini besler.")
 
-                # Kalıcı görsel bildirim kutusu
                 if st.session_state.last_feedback_msg:
                     if st.session_state.last_feedback_type == "success":
                         st.success(st.session_state.last_feedback_msg)
@@ -500,26 +473,24 @@ with tab_analitik:
         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
         col_m1.metric("Toplam Kayıtlı Müşteri", len(df_musteriler))
 
-        # Segment sütunu bu veri setinde yok; VIP tanımı Sadakat_Puani'nın
-        # üst %25'i olarak (yukarıda VIP_ESIK_DEGERI ile) türetiliyor.
         if "Sadakat_Puani" in df_musteriler.columns:
             vip_count = int((df_musteriler["Sadakat_Puani"] >= VIP_ESIK_DEGERI).sum())
         else:
             vip_count = 0
         col_m2.metric("VIP Müşteri Sayısı", vip_count)
 
-        # Eski 'gecmis_ortalama_sepet_tutari' sütununun karşılığı: Sepet_Tutari_TL
         col_m3.metric("Ort. Harcama Tutarı", f"{df_musteriler['Sepet_Tutari_TL'].mean():.1f} TL" if 'Sepet_Tutari_TL' in df_musteriler else "N/A")
-        # Eski 'musteri_kidem_gun' (kayıt tarihi) bu veri setinde yok; en yakın
-        # anlamlı karşılığı genel son-aktivite göstergesi olan Gecen_Gun_Sayisi.
         col_m4.metric("Ort. Son Aktivite (Gün)", f"{df_musteriler['Gecen_Gun_Sayisi'].mean():.0f} Gün" if 'Gecen_Gun_Sayisi' in df_musteriler else "N/A")
 
         st.divider()
         st.markdown("##### 📄 Mevcut Müşteri Veri Tablosu")
 
         df_display = df_musteriler.copy()
-        if maskeleme_aktif and 'Ad_Soyad' in df_display.columns:
-            df_display['Ad_Soyad'] = df_display['Ad_Soyad'].apply(lambda x: mask_text(str(x)))
+        if maskeleme_aktif:
+            if 'Ad_Soyad' in df_display.columns:
+                df_display['Ad_Soyad'] = df_display['Ad_Soyad'].apply(lambda x: mask_text(str(x)))
+            if 'telefon' in df_display.columns:
+                df_display['telefon'] = df_display['telefon'].apply(lambda x: mask_text(str(x), visible_chars=4))
 
         st.dataframe(df_display, use_container_width=True, hide_index=True)
     else:
