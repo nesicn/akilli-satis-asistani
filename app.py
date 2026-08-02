@@ -124,6 +124,22 @@ DB_FILE = "kasa_veritabani.db"
 MUSTERI_CSV_YOLU = "musteri_davranis_seti.csv"
 
 
+def _telefon_normallestir(deger):
+    """Farklı telefon yazımlarını (05xx..., 5xx..., +90..., boşluklu/tireli)
+    tek, karşılaştırılabilir bir formata indirger: sadece rakamlar, başındaki
+    ülke kodu (90) veya yurt-içi sıfır (0) atılır. Böylece kullanıcı telefonu
+    hangi formatta yazarsa yazsın (veya CSV'de hangi formatta saklanmışsa)
+    arama tutarlı çalışır."""
+    if deger is None:
+        return ""
+    rakamlar = "".join(ch for ch in str(deger) if ch.isdigit())
+    if len(rakamlar) == 12 and rakamlar.startswith("90"):
+        rakamlar = rakamlar[2:]
+    if len(rakamlar) == 11 and rakamlar.startswith("0"):
+        rakamlar = rakamlar[1:]
+    return rakamlar
+
+
 def get_db_connection():
     """SQLite veritabanı bağlantısı oluşturur."""
     conn = sqlite3.connect(DB_FILE)
@@ -190,15 +206,55 @@ def init_database():
 
             aktarilacak_kolonlar = ["Musteri_ID", "Ad_Soyad"] + [c for c in MUSTERI_TUM_OZNITELIK_KOLONLARI if c in df_csv.columns]
             df_to_save = df_csv[aktarilacak_kolonlar].copy()
-            # CSV'de telefon numarası yok (bu satır set'i toplu/tarihsel müşterileri
-            # temsil ediyor); telefon sütunu bu müşteriler için NULL kalır ve
-            # onlar Musteri_ID üzerinden aranabilir.
+            if "telefon" in df_csv.columns:
+                df_to_save.insert(1, "telefon", df_csv["telefon"].apply(_telefon_normallestir))
             df_to_save.to_sql("musteriler", conn, if_exists="append", index=False)
             conn.commit()
         except Exception as e:
             st.error(f"CSV'den SQLite'a veri aktarılırken hata: {e}")
 
     conn.close()
+    _senkronize_telefon_csvden()
+
+
+def _senkronize_telefon_csvden():
+    """CSV'de olup (örn. sonradan eklenmiş) veritabanındaki müşteri
+    kayıtlarında hâlâ eksik olan telefon numaralarını tamamlar. Sadece DB'de
+    telefon NULL/boş olan satırlar güncellenir; mevcut değerlerin (örn.
+    uygulama içinden kayıt olmuş yeni müşteriler) üzerine asla yazılmaz.
+    DB zaten güncelse (eksik yoksa) hemen çıkar, her yenilemede performans
+    kaybı yaratmaz."""
+    if not os.path.exists(MUSTERI_CSV_YOLU):
+        return
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA table_info(musteriler)")
+        if "telefon" not in {r[1] for r in cursor.fetchall()}:
+            return
+
+        cursor.execute("SELECT COUNT(*) FROM musteriler WHERE telefon IS NULL OR telefon = ''")
+        if cursor.fetchone()[0] == 0:
+            return  # zaten senkron, hızlı çıkış
+
+        df_csv = pd.read_csv(MUSTERI_CSV_YOLU, encoding="utf-8-sig", dtype={"Musteri_ID": str})
+        df_csv.columns = [str(c).strip() for c in df_csv.columns]
+        if "telefon" not in df_csv.columns:
+            return
+
+        df_tel = df_csv[["Musteri_ID", "telefon"]].copy()
+        df_tel["telefon"] = df_tel["telefon"].apply(_telefon_normallestir)
+        df_tel = df_tel[df_tel["telefon"] != ""]
+
+        cursor.executemany(
+            "UPDATE musteriler SET telefon = ? WHERE Musteri_ID = ? AND (telefon IS NULL OR telefon = '')",
+            list(zip(df_tel["telefon"], df_tel["Musteri_ID"]))
+        )
+        conn.commit()
+    except Exception as e:
+        st.warning(f"Telefon numaraları senkronize edilirken uyarı: {e}")
+    finally:
+        conn.close()
 
 
 init_database()
@@ -262,14 +318,20 @@ def _sik_alisveris_esigi():
 
 def musteri_ara(arama_terimi):
     """Telefon numarası VEYA Musteri_ID ile güvenli (parameterized) arama.
-    Her iki değer de '?' yer tutucusu ile bağlanır; ham girdi asla SQL
-    metnine dahil edilmez (SQL injection'a karşı güvenli)."""
+    Telefon için normalize edilmiş (sadece rakam, başında 0/90 olmadan) hâli
+    karşılaştırılır; böylece '05551234567', '5551234567' ve '+905551234567'
+    hepsi aynı müşteriyi bulur. Her iki değer de '?' yer tutucusu ile
+    bağlanır; ham girdi asla SQL metnine dahil edilmez."""
     if not arama_terimi:
         return None
-    terim = arama_terimi.strip()
+    terim_ham = arama_terimi.strip()
+    terim_telefon = _telefon_normallestir(terim_ham)
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM musteriler WHERE telefon = ? OR Musteri_ID = ? LIMIT 1", (terim, terim))
+    cursor.execute(
+        "SELECT * FROM musteriler WHERE telefon = ? OR Musteri_ID = ? LIMIT 1",
+        (terim_telefon, terim_ham)
+    )
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
@@ -296,7 +358,7 @@ def yeni_musteri_ekle(ad_soyad, telefon, segment, cinsiyet, yas_grubu, magaza_ti
     kayit["Hafta_Ici_Hafta_Sonu"] = int(kayit.get("Hafta_Ici_Hafta_Sonu", 0) or 0)
 
     kolonlar = ["Musteri_ID", "telefon", "Ad_Soyad"] + [k for k in MUSTERI_TUM_OZNITELIK_KOLONLARI if k in kayit]
-    degerler = [yeni_id, telefon.strip(), ad_soyad.strip()] + [kayit[k] for k in kolonlar[3:]]
+    degerler = [yeni_id, _telefon_normallestir(telefon), ad_soyad.strip()] + [kayit[k] for k in kolonlar[3:]]
     yer_tutucular = ", ".join(["?"] * len(kolonlar))
 
     conn = get_db_connection()
@@ -318,7 +380,8 @@ def musteri_satis_kaydet(musteri_kimlik, harcanan_tutar, secilen_kategori):
     canlı günceller (sonraki ziyarette daha isabetli tahmin için)."""
     if not musteri_kimlik:
         return False
-    kimlik = musteri_kimlik.strip()
+    kimlik_ham = musteri_kimlik.strip()
+    kimlik_telefon = _telefon_normallestir(kimlik_ham)
     onek = KATEGORI_KOLON_ONEKI.get(secilen_kategori)  # sabit, kod-içi eşlemeden -> güvenli
 
     conn = get_db_connection()
@@ -334,12 +397,12 @@ def musteri_satis_kaydet(musteri_kimlik, harcanan_tutar, secilen_kategori):
                     {kolon_gecen_gun} = 0,
                     {kolon_alisveris} = COALESCE({kolon_alisveris}, 0) + 1
                 WHERE telefon = ? OR Musteri_ID = ?
-            """, (harcanan_tutar, kimlik, kimlik))
+            """, (harcanan_tutar, kimlik_telefon, kimlik_ham))
         else:
             cursor.execute("""
                 UPDATE musteriler SET Sepet_Tutari_TL = ?, Gecen_Gun_Sayisi = 0
                 WHERE telefon = ? OR Musteri_ID = ?
-            """, (harcanan_tutar, kimlik, kimlik))
+            """, (harcanan_tutar, kimlik_telefon, kimlik_ham))
         conn.commit()
         return True
     except Exception:
