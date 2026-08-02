@@ -26,6 +26,10 @@ st.markdown("""
         border-radius: 8px;
         margin-top: 10px;
         margin-bottom: 10px;
+        color: #14532D !important;
+    }
+    .xai-box * {
+        color: #14532D !important;
     }
     .xai-box-low {
         background-color: #FEF2F2;
@@ -34,6 +38,10 @@ st.markdown("""
         border-radius: 8px;
         margin-top: 10px;
         margin-bottom: 10px;
+        color: #7F1D1D !important;
+    }
+    .xai-box-low * {
+        color: #7F1D1D !important;
     }
     .xai-box-neutral {
         background-color: #FFFBEB;
@@ -42,6 +50,10 @@ st.markdown("""
         border-radius: 8px;
         margin-top: 10px;
         margin-bottom: 10px;
+        color: #78350F !important;
+    }
+    .xai-box-neutral * {
+        color: #78350F !important;
     }
     </style>
 """, unsafe_allow_html=True)
