@@ -507,6 +507,7 @@ def generate_xai_insights(secili_musteri, harcanan_tutar, secilen_kategori, prob
 
     sadakat_puani = secili_musteri.get('Sadakat_Puani') if secili_musteri else None
     segment = musteri_segment_belirle(sadakat_puani) if sadakat_puani is not None else 'Standart'
+    
     if segment == 'VIP':
         insights.append(("pos", f"⭐ **VIP Müşteri Sadakati:** Sadakat puanı ({sadakat_puani:.0f}) üst %25'te — yüksek bağlılık ikna olasılığını artırıyor."))
     elif segment == 'Sadık Müşteri':
@@ -520,17 +521,19 @@ def generate_xai_insights(secili_musteri, harcanan_tutar, secilen_kategori, prob
         ort_aralik = float(secili_musteri.get(f"{kat_onek}_Ort_Alim_Araligi", 30) or 30)
         tuketim_orani = float(secili_musteri.get(f"{kat_onek}_Tuketim_Orani", 0.5) or 0.5)
         alisveris_sayisi = float(secili_musteri.get(f"{kat_onek}_Alisveris_Sayisi", 0) or 0)
-
-        if ort_aralik > 0 and gecen_gun >= ort_aralik:
-            insights.append(("pos", f"⏳ **Yenileme Zamanı Gelmiş ({secilen_kategori}):** Son alımdan bu yana {int(gecen_gun)} gün geçmiş (Ort. Döngü: {int(ort_aralik)} gün). Müşterinin bu ürüne ihtiyacı yüksek."))
-        elif ort_aralik > 0:
-            insights.append(("neu", f"🕐 **Henüz Erken ({secilen_kategori}):** Son alımdan {int(gecen_gun)} gün geçmiş, ortalama döngüsü {int(ort_aralik)} gün — henüz vaktinden önce olabilir."))
-
-        if tuketim_orani > 0.6:
-            insights.append(("pos", f"📈 **Yüksek Tüketim Skoru:** {secilen_kategori} kategorisindeki geçmiş tüketim oranı (%{tuketim_orani*100:.0f}) yüksek."))
-
+        
+        # DÜZELTİLEN KISIM: Eğer ilk kez alışveriş yapıyorsa gün hesabı yapma
         if alisveris_sayisi == 0:
             insights.append(("neu", f"🆕 **İlk Kez ({secilen_kategori}):** Müşterinin bu kategoride geçmiş alışverişi yok; öneri keşif amaçlı olabilir."))
+        else:
+            # Daha önce alışverişi Varsa gün ve tüketim hesabı yap
+            if ort_aralik > 0 and gecen_gun >= ort_aralik:
+                insights.append(("pos", f"⏳ **Yenileme Zamanı Gelmiş ({secilen_kategori}):** Son alımdan bu yana {int(gecen_gun)} gün geçmiş (Ort. Döngü: {int(ort_aralik)} gün). Müşterinin bu ürüne ihtiyacı yüksek."))
+            elif ort_aralik > 0:
+                insights.append(("neu", f"🕐 **Henüz Erken ({secilen_kategori}):** Son alımdan {int(gecen_gun)} gün geçmiş, ortalama döngüsü {int(ort_aralik)} gün — henüz vaktinden önce olabilir."))
+
+            if tuketim_orani > 0.6:
+                insights.append(("pos", f"📈 **Yüksek Tüketim Skoru:** {secilen_kategori} kategorisindeki geçmiş tüketim oranı (%{tuketim_orani*100:.0f}) yüksek."))
 
     if harcanan_tutar >= 500:
         insights.append(("pos", f"💰 **Yüksek Alışveriş Hacmi:** {harcanan_tutar:.0f} TL tutarındaki sepet, müşterinin ek tekliflere açık olduğunu gösteriyor."))
@@ -552,7 +555,6 @@ def generate_xai_insights(secili_musteri, harcanan_tutar, secilen_kategori, prob
         insights.append(("neu", "ℹ️ Genel sepet ortalamaları ve mağaza içi standart müşteri profil davranışları esas alındı."))
 
     return insights
-
 
 # ==========================================
 # 6. YAN MENÜ (SIDEBAR)
