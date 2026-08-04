@@ -62,8 +62,7 @@ st.markdown("""
 # 2. MODEL ŞEMASI SABİTLERİ (smart_kasa_model.pkl ile birebir uyumlu)
 # ==========================================
 # 'Onerilen_Kategori' görünen adı <-> sütun öneki (örn. "Cilt Bakımı" -> "Cilt_Bakimi").
-# Model 10 kategori üzerinde eğitildi; DB şeması, XAI ve ürün önerisi TEK bu
-# kaynaktan besleniyor (tutarlılık için).
+# Model 10 kategori üzerinde eğitildi; DB şeması, XAI ve ürün önerisi TEK bu kaynaktan besleniyor (tutarlılık için).
 KATEGORI_KOLON_ONEKI = {
     "Makyaj": "Makyaj",
     "Cilt Bakımı": "Cilt_Bakimi",
@@ -77,45 +76,116 @@ KATEGORI_KOLON_ONEKI = {
     "Erkek Bakım": "Erkek_Bakim",
 }
 
-KATEGORI_URUN_ONERI = {
-    "Makyaj": ("Göz Farı", 79.90),
-    "Cilt Bakımı": ("Misel Su", 69.90),
-    "Ağız Bakımı": ("Ağız Çalkalama Suyu", 44.90),
-    "Parfüm": ("Vücut Spreyi (Body Mist)", 59.90),
-    "Saç Bakımı": ("Kuru Şampuan", 64.90),
-    "Vücut Bakımı & Banyo": ("Banyo Bombası", 29.90),
-    "El & Ayak Bakımı": ("Aseton", 24.90),
-    "Güneş & Bronzlaşma": ("Aloe Vera Jeli", 39.90),
-    "Aksesuar & Güzellik Aletleri": ("Gua Sha Taşı", 89.90),
-    "Erkek Bakım": ("Tıraş Köpüğü", 54.90),
+# DİNAMİK ÜRÜN HAVUZU (Kategori Bazlı Ürünler, Stok, Fiyat ve Kâr Marjı)
+KATEGORI_URUN_HAVUZU = {
+    "Makyaj": [
+        {"urun": "Göz Farı Paleti", "fiyat": 79.90, "stok": True, "kar_marji": 0.40},
+        {"urun": "Likit Ruj", "fiyat": 59.90, "stok": True, "kar_marji": 0.35},
+        {"urun": "Hacim Veren Maskara", "fiyat": 89.90, "stok": True, "kar_marji": 0.50},
+    ],
+    "Cilt Bakımı": [
+        {"urun": "Misel Su (200ml)", "fiyat": 69.90, "stok": True, "kar_marji": 0.45},
+        {"urun": "Nemlendirici Yüz Kremi", "fiyat": 129.90, "stok": True, "kar_marji": 0.50},
+        {"urun": "Güneş Koruyucu Krem", "fiyat": 149.90, "stok": True, "kar_marji": 0.40},
+    ],
+    "Ağız Bakımı": [
+        {"urun": "Ağız Çalkalama Suyu", "fiyat": 44.90, "stok": True, "kar_marji": 0.30},
+        {"urun": "Diş Beyazlatıcı Macun", "fiyat": 54.90, "stok": True, "kar_marji": 0.40},
+    ],
+    "Parfüm": [
+        {"urun": "Vücut Spreyi (Body Mist)", "fiyat": 59.90, "stok": True, "kar_marji": 0.35},
+        {"urun": "Cep Parfümü (15ml)", "fiyat": 89.90, "stok": True, "kar_marji": 0.45},
+    ],
+    "Saç Bakımı": [
+        {"urun": "Kuru Şampuan", "fiyat": 64.90, "stok": True, "kar_marji": 0.40},
+        {"urun": "Saç Bakım Yağı", "fiyat": 99.90, "stok": True, "kar_marji": 0.50},
+    ],
+    "Vücut Bakımı & Banyo": [
+        {"urun": "Banyo Topu", "fiyat": 29.90, "stok": True, "kar_marji": 0.30},
+        {"urun": "Nemlendirici Vücut Losyonu", "fiyat": 79.90, "stok": True, "kar_marji": 0.40},
+    ],
+    "El & Ayak Bakımı": [
+        {"urun": "Aseton (Besleyici)", "fiyat": 24.90, "stok": True, "kar_marji": 0.25},
+        {"urun": "Yoğun El Kremi", "fiyat": 49.90, "stok": True, "kar_marji": 0.35},
+    ],
+    "Güneş & Bronzlaşma": [
+        {"urun": "Aloe Vera Jeli", "fiyat": 39.90, "stok": True, "kar_marji": 0.35},
+        {"urun": "Bronzlaştırıcı Yağ", "fiyat": 119.90, "stok": True, "kar_marji": 0.45},
+    ],
+    "Aksesuar & Güzellik Aletleri": [
+        {"urun": "Gua Sha Taşı", "fiyat": 89.90, "stok": True, "kar_marji": 0.50},
+        {"urun": "Makyaj Süngeri Seti", "fiyat": 49.90, "stok": True, "kar_marji": 0.40},
+    ],
+    "Erkek Bakım": [
+        {"urun": "Tıraş Köpüğü", "fiyat": 54.90, "stok": True, "kar_marji": 0.35},
+        {"urun": "Tıraş Sonrası Balsam", "fiyat": 79.90, "stok": True, "kar_marji": 0.40},
+    ],
 }
+
+def dinamik_urun_oner(secilen_kategori, sepet_tutari=0.0):
+    """Kategori havuzundan sepet tutarına ve kârlılığa uygun ürünü dinamik olarak seçer."""
+    havuz = KATEGORI_URUN_HAVUZU.get(secilen_kategori, [])
+    if not havuz:
+        return "Genel Fırsat Ürünü", 49.90
+
+    # Sepet tutarına göre bütçe üst sınırı (Sepetin max %30'u veya en az 50 TL)
+    butce_siniri = max(sepet_tutari * 0.30, 50.0)
+    uygun_urunler = [
+        u for u in havuz if u["stok"] and u["fiyat"] <= butce_siniri
+    ]
+
+    # Bütçeye uygun ürün yoksa stoktaki en ucuz ürünü seç
+    if not uygun_urunler:
+        uygun_urunler = sorted(
+            [u for u in havuz if u["stok"]], key=lambda x: x["fiyat"]
+        )
+
+    if not uygun_urunler:
+        return "Kasa Önü Fırsat Ürünü", 39.90
+
+    # En yüksek kâr marjına sahip ürünü seç
+    en_iyi_urun = max(uygun_urunler, key=lambda x: x["kar_marji"])
+    return en_iyi_urun["urun"], en_iyi_urun["fiyat"]
 
 # Kategorik özellikler. NOT: Hafta_Ici_Hafta_Sonu veride 0/1 TAM SAYI olarak
 # saklanıyor ve model TAM SAYI (int) kategorileriyle eğitildi (0, 1) — metne
 # çevrilirse (örn. "Hafta Sonu") OneHotEncoder bunu "bilinmeyen kategori"
 # sayıp sessizce sıfırlar. Bu yüzden DB'de de INTEGER olarak tutuluyor.
 MUSTERI_KATEGORIK_KOLONLAR = [
-    "Cinsiyet", "Yas_Grubu", "Magaza_Tipi", "Mevsim",
-    "Islem_Saati_Dilimi", "Hafta_Ici_Hafta_Sonu",
+    "Cinsiyet",
+    "Yas_Grubu",
+    "Magaza_Tipi",
+    "Mevsim",
+    "Islem_Saati_Dilimi",
+    "Hafta_Ici_Hafta_Sonu",
 ]
 _KATEGORIK_SQL_TIPI = {"Hafta_Ici_Hafta_Sonu": "INTEGER"}  # diğerleri TEXT
 
 MUSTERI_GENEL_SAYISAL_KOLONLAR = [
-    "Sadakat_Puani", "Promosyon_Hassasiyeti_Skoru", "Gecen_Gun_Sayisi",
-    "Coklu_Kategori_Alim_Skoru", "Sepet_Tutari_TL",
+    "Sadakat_Puani",
+    "Promosyon_Hassasiyeti_Skoru",
+    "Gecen_Gun_Sayisi",
+    "Coklu_Kategori_Alim_Skoru",
+    "Sepet_Tutari_TL",
 ]
 
 MUSTERI_KATEGORI_SAYISAL_KOLONLAR = []
 for _onek in KATEGORI_KOLON_ONEKI.values():
     MUSTERI_KATEGORI_SAYISAL_KOLONLAR += [
-        f"{_onek}_Alisveris_Sayisi", f"Gecen_Gun_{_onek}",
-        f"{_onek}_Ort_Alim_Araligi", f"{_onek}_Tuketim_Orani",
+        f"{_onek}_Alisveris_Sayisi",
+        f"Gecen_Gun_{_onek}",
+        f"{_onek}_Ort_Alim_Araligi",
+        f"{_onek}_Tuketim_Orani",
     ]
 
-MUSTERI_TUM_SAYISAL_KOLONLAR = MUSTERI_GENEL_SAYISAL_KOLONLAR + MUSTERI_KATEGORI_SAYISAL_KOLONLAR
+MUSTERI_TUM_SAYISAL_KOLONLAR = (
+    MUSTERI_GENEL_SAYISAL_KOLONLAR + MUSTERI_KATEGORI_SAYISAL_KOLONLAR
+)
 # DB'deki TÜM müşteri öznitelik sütunları (kimlik hariç) - modelin ihtiyaç
 # duyduğu her şeyi kapsar; init_database() bu listeyi eksiksiz oluşturur.
-MUSTERI_TUM_OZNITELIK_KOLONLARI = MUSTERI_KATEGORIK_KOLONLAR + MUSTERI_TUM_SAYISAL_KOLONLAR
+MUSTERI_TUM_OZNITELIK_KOLONLARI = (
+    MUSTERI_KATEGORIK_KOLONLAR + MUSTERI_TUM_SAYISAL_KOLONLAR
+)
 
 # ==========================================
 # 3. VERİTABANI (SQLITE) MİMARİSİ VE YÖNETİMİ
@@ -337,25 +407,48 @@ def musteri_ara(arama_terimi):
     return dict(row) if row else None
 
 
-def yeni_musteri_ekle(ad_soyad, telefon, segment, cinsiyet, yas_grubu, magaza_tipi, mevsim, genel_profil):
-    """Güvenli (parameterized) müşteri ekleme. Formda toplanmayan tüm
-    öznitelikler nüfus-geneli varsayılan profille doldurulur; böylece yeni
-    müşteri de ilk andan itibaren modelin tüm sütunlarına sahip olur."""
+def yeni_musteri_ekle(ad_soyad, telefon, segment, cinsiyet, yas_grubu, magaza_tipi, mevsim):
+    """Güvenli (parameterized) müşteri ekleme.
+
+    TASARIM KARARI: Yeni müşteri GERÇEKTEN boş bir geçmişle başlar; nüfus
+    ortalamasıyla DEĞİL. Kategori bazlı 'kaç gün önce aldı', 'ortalama
+    alım aralığı', 'tüketim oranı' alanları bu müşteri için henüz
+    TANIMSIZ olduğundan NULL bırakılır — nüfus ortalamasını bu kişinin
+    KENDİ geçmişiymiş gibi göstermek yanıltıcı olurdu. Alışveriş sayısı
+    (Alisveris_Sayisi) ve kategori-çeşitliliği skoru gerçekten 0'dır, bu
+    yüzden 0 olarak yazılır (0, NULL'dan farklı olarak burada DOĞRU bir
+    bilgidir). Müşteri gerçekten kasada işlem yaptıkça (bkz.
+    musteri_satis_kaydet), bu alanlar GERÇEK verilerle dolmaya başlar.
+    Formda toplanmayan diğer alanlar (Promosyon_Hassasiyeti_Skoru,
+    Islem_Saati_Dilimi vb.) de bilinmediği için NULL bırakılır; tahmin
+    anında bunlar pipeline'ın EĞİTİMDEN öğrendiği medyan/mod değerleriyle
+    doldurulur (SimpleImputer) — bu, nüfus ortalamasını sahte kişisel
+    geçmiş gibi sunmaktan daha dürüst bir yaklaşımdır.
+    """
     puan_map = {"Yeni Müşteri": 10.0, "Standart Müşteri": 30.0, "Sadık Müşteri": 65.0, "VIP Müşteri": 90.0}
     puan = puan_map.get(segment, 20.0)
     yeni_id = f"MST-N{random.randint(10000, 99999)}"
 
-    # Kayıt sözlüğü: anahtarlar HER ZAMAN kod-içi sabit listelerden
-    # (MUSTERI_TUM_OZNITELIK_KOLONLARI / genel_profil) geldiği için sütun
-    # adları asla kullanıcı girdisinden türetilmez. Sadece DEĞERLER
+    # Kayıt sözlüğü: anahtarlar HER ZAMAN kod-içi sabit listelerden gelir,
+    # kullanıcı girdisinden asla sütun adı türetilmez. Sadece DEĞERLER
     # (ad_soyad, telefon gibi) kullanıcıdan gelir ve '?' ile parametrize edilir.
-    kayit = dict(genel_profil)
-    kayit.update({
+    kayit = {
         "Cinsiyet": cinsiyet, "Yas_Grubu": yas_grubu,
         "Magaza_Tipi": magaza_tipi, "Mevsim": mevsim,
-        "Sadakat_Puani": puan, "Sepet_Tutari_TL": 0.0, "Gecen_Gun_Sayisi": 0,
-    })
-    kayit["Hafta_Ici_Hafta_Sonu"] = int(kayit.get("Hafta_Ici_Hafta_Sonu", 0) or 0)
+        "Sadakat_Puani": puan, "Sepet_Tutari_TL": 0.0,
+        "Coklu_Kategori_Alim_Skoru": 0.0,  # gerçekten 0: henüz hiçbir kategoriden alışverişi yok
+        # Aşağıdakiler kasıtlı olarak None/NULL: bu müşterinin henüz GERÇEK
+        # bir davranış geçmişi yok, bu yüzden özel bir sayı uydurmuyoruz.
+        "Gecen_Gun_Sayisi": None,
+        "Promosyon_Hassasiyeti_Skoru": None,
+        "Islem_Saati_Dilimi": None,
+        "Hafta_Ici_Hafta_Sonu": None,
+    }
+    for onek in KATEGORI_KOLON_ONEKI.values():
+        kayit[f"{onek}_Alisveris_Sayisi"] = 0       # gerçek: 0 kez alışveriş
+        kayit[f"Gecen_Gun_{onek}"] = None            # tanımsız: hiç alımı yok
+        kayit[f"{onek}_Ort_Alim_Araligi"] = None      # tanımsız: aralık hesaplanamaz
+        kayit[f"{onek}_Tuketim_Orani"] = None         # tanımsız: oran hesaplanamaz
 
     kolonlar = ["Musteri_ID", "telefon", "Ad_Soyad"] + [k for k in MUSTERI_TUM_OZNITELIK_KOLONLARI if k in kayit]
     degerler = [yeni_id, _telefon_normallestir(telefon), ad_soyad.strip()] + [kayit[k] for k in kolonlar[3:]]
@@ -390,11 +483,18 @@ def musteri_satis_kaydet(musteri_kimlik, harcanan_tutar, secilen_kategori):
         if onek:
             kolon_gecen_gun = f"Gecen_Gun_{onek}"
             kolon_alisveris = f"{onek}_Alisveris_Sayisi"
+            kolon_oran = f"{onek}_Tuketim_Orani"
+            # Ort_Alim_Araligi'ye kasıtlı dokunulmuyor: gerçek bir aralık ancak
+            # bu kategoride EN AZ 2. alımda hesaplanabilir (önceki alım
+            # tarihini bilmemiz gerekir). İlk alımda NULL kalması, uydurma bir
+            # sayı yazmaktan daha doğrudur; 2. alımdan itibaren zaten dolu olan
+            # değer üzerinden tüketim oranı hesaplanmaya devam eder.
             cursor.execute(f"""
                 UPDATE musteriler
                 SET Sepet_Tutari_TL = ?,
                     Gecen_Gun_Sayisi = 0,
                     {kolon_gecen_gun} = 0,
+                    {kolon_oran} = 0,
                     {kolon_alisveris} = COALESCE({kolon_alisveris}, 0) + 1
                 WHERE telefon = ? OR Musteri_ID = ?
             """, (harcanan_tutar, kimlik_telefon, kimlik_ham))
@@ -502,12 +602,11 @@ def mask_text(text, visible_chars=2):
 
 
 def generate_xai_insights(secili_musteri, harcanan_tutar, secilen_kategori, proba):
-    """Zengin, çok sinyalli açıklanabilirlik (XAI) kutuları üretir."""
+    """Zengin, çok sinyalli açıklanabilirlik kutuları üretir."""
     insights = []
 
     sadakat_puani = secili_musteri.get('Sadakat_Puani') if secili_musteri else None
     segment = musteri_segment_belirle(sadakat_puani) if sadakat_puani is not None else 'Standart'
-    
     if segment == 'VIP':
         insights.append(("pos", f"⭐ **VIP Müşteri Sadakati:** Sadakat puanı ({sadakat_puani:.0f}) üst %25'te — yüksek bağlılık ikna olasılığını artırıyor."))
     elif segment == 'Sadık Müşteri':
@@ -517,23 +616,28 @@ def generate_xai_insights(secili_musteri, harcanan_tutar, secilen_kategori, prob
 
     kat_onek = KATEGORI_KOLON_ONEKI.get(secilen_kategori)
     if secili_musteri and kat_onek:
-        gecen_gun = float(secili_musteri.get(f"Gecen_Gun_{kat_onek}", 30) or 30)
-        ort_aralik = float(secili_musteri.get(f"{kat_onek}_Ort_Alim_Araligi", 30) or 30)
-        tuketim_orani = float(secili_musteri.get(f"{kat_onek}_Tuketim_Orani", 0.5) or 0.5)
-        alisveris_sayisi = float(secili_musteri.get(f"{kat_onek}_Alisveris_Sayisi", 0) or 0)
-        
-        # DÜZELTİLEN KISIM: Eğer ilk kez alışveriş yapıyorsa gün hesabı yapma
+        alisveris_ham = secili_musteri.get(f"{kat_onek}_Alisveris_Sayisi")
+        alisveris_sayisi = float(alisveris_ham) if alisveris_ham not in (None, "") else 0.0
+
         if alisveris_sayisi == 0:
+            # Bu kategoride GERÇEKTEN hiç alışverişi yok; "X gün önce aldı"
+            # gibi bir iddiada bulunmuyoruz çünkü tanımsız (uydurma olurdu).
             insights.append(("neu", f"🆕 **İlk Kez ({secilen_kategori}):** Müşterinin bu kategoride geçmiş alışverişi yok; öneri keşif amaçlı olabilir."))
         else:
-            # Daha önce alışverişi Varsa gün ve tüketim hesabı yap
-            if ort_aralik > 0 and gecen_gun >= ort_aralik:
-                insights.append(("pos", f"⏳ **Yenileme Zamanı Gelmiş ({secilen_kategori}):** Son alımdan bu yana {int(gecen_gun)} gün geçmiş (Ort. Döngü: {int(ort_aralik)} gün). Müşterinin bu ürüne ihtiyacı yüksek."))
-            elif ort_aralik > 0:
-                insights.append(("neu", f"🕐 **Henüz Erken ({secilen_kategori}):** Son alımdan {int(gecen_gun)} gün geçmiş, ortalama döngüsü {int(ort_aralik)} gün — henüz vaktinden önce olabilir."))
+            gecen_gun_ham = secili_musteri.get(f"Gecen_Gun_{kat_onek}")
+            ort_aralik_ham = secili_musteri.get(f"{kat_onek}_Ort_Alim_Araligi")
+            tuketim_orani_ham = secili_musteri.get(f"{kat_onek}_Tuketim_Orani")
 
-            if tuketim_orani > 0.6:
-                insights.append(("pos", f"📈 **Yüksek Tüketim Skoru:** {secilen_kategori} kategorisindeki geçmiş tüketim oranı (%{tuketim_orani*100:.0f}) yüksek."))
+            if gecen_gun_ham not in (None, "") and ort_aralik_ham not in (None, "", 0):
+                gecen_gun = float(gecen_gun_ham)
+                ort_aralik = float(ort_aralik_ham)
+                if gecen_gun >= ort_aralik:
+                    insights.append(("pos", f"⏳ **Yenileme Zamanı Gelmiş ({secilen_kategori}):** Son alımdan bu yana {int(gecen_gun)} gün geçmiş (Ort. Döngü: {int(ort_aralik)} gün). Müşterinin bu ürüne ihtiyacı yüksek."))
+                else:
+                    insights.append(("neu", f"🕐 **Henüz Erken ({secilen_kategori}):** Son alımdan {int(gecen_gun)} gün geçmiş, ortalama döngüsü {int(ort_aralik)} gün — henüz vaktinden önce olabilir."))
+
+            if tuketim_orani_ham not in (None, "") and float(tuketim_orani_ham) > 0.6:
+                insights.append(("pos", f"📈 **Yüksek Tüketim Skoru:** {secilen_kategori} kategorisindeki geçmiş tüketim oranı yüksek."))
 
     if harcanan_tutar >= 500:
         insights.append(("pos", f"💰 **Yüksek Alışveriş Hacmi:** {harcanan_tutar:.0f} TL tutarındaki sepet, müşterinin ek tekliflere açık olduğunu gösteriyor."))
@@ -556,13 +660,14 @@ def generate_xai_insights(secili_musteri, harcanan_tutar, secilen_kategori, prob
 
     return insights
 
+
 # ==========================================
 # 6. YAN MENÜ (SIDEBAR)
 # ==========================================
 with st.sidebar:
     st.image("https://img.icons8.com/color/96/000000/checkout.png", width=70)
     st.title("Smart Checkout AI")
-    st.caption("SQLite & AI Powered POS")
+    st.caption("")
     st.divider()
 
     maskeleme_aktif = st.toggle("🔒 Maskeleme Modu", value=False)
@@ -646,7 +751,7 @@ with tab_kasa:
             if model is None:
                 st.error("Model yüklü olmadığı için tahmin yapılamıyor.")
             else:
-                oneri_urun, oneri_fiyat = KATEGORI_URUN_ONERI.get(secilen_kategori, ("Kasa Önü Minis Ürünler", 19.90))
+                oneri_urun, oneri_fiyat = dinamik_urun_oner(secilen_kategori, harcanan_tutar)
 
                 # --- A. FEATURE VEKTÖRÜNÜ HAZIRLAMA (53 ÖZELLİKLİ MODEL MİMARİSİ) ---
                 # SQLite'tan gelen müşteri satırı ARTIK modelin ihtiyaç duyduğu tüm
@@ -661,7 +766,12 @@ with tab_kasa:
                 input_dict["Onerilen_Urun"] = oneri_urun
 
                 df_input = pd.DataFrame([input_dict])
-                df_input = df_input.where(pd.notnull(df_input), None)  # SQL NULL -> NaN uyumu
+                # Yeni/kısmi müşteri kayıtlarında bazı alanlar SQL NULL (Python None)
+                # olabilir (örn. hiç alışverişi olmayan bir kategori). Bunları np.nan'a
+                # çeviriyoruz ki pipeline'ın SimpleImputer'ı bunları tanıyıp EĞİTİMDEN
+                # öğrendiği medyan/mod değerleriyle doldursun (sıfır veya uydurma bir
+                # sayı ATAMIYORUZ, gerçek eksik-veri doldurma mekanizmasını kullanıyoruz).
+                df_input = df_input.replace({None: np.nan})
                 expected_features = getattr(model, "feature_names_in_", None)
                 if expected_features is not None:
                     df_input = df_input.reindex(columns=list(expected_features), fill_value=0)
@@ -765,14 +875,14 @@ with tab_analitik:
     conn.close()
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Veritabanındaki Müşteri", total_cust)
+    m1.metric("Kayıtlı Müşteri", total_cust)
     m2.metric("Ort. Sadakat Skor Puanı", f"{avg_puan:.1f}")
     m3.metric("Kasa Dönüşüm Oranı", f"%{acc_rate:.1f}")
     m4.metric("AI Kazanımı Ciro", f"{st.session_state.ai_generated_revenue:.2f} TL")
 
     st.divider()
     m5, m6 = st.columns(2)
-    m5.metric("Ort. Sepet Tutarı (Veritabanı)", f"{avg_sepet:.1f} TL")
+    m5.metric("Ort. Sepet Tutarı", f"{avg_sepet:.1f} TL")
     m6.metric("VIP Eşiği (Üst %25 Sadakat Puanı)", f"{VIP_ESIK_DEGERI:.0f}")
 
     st.divider()
@@ -794,7 +904,7 @@ with tab_analitik:
 # ------------------------------------------
 with tab_yeni_musteri:
     st.subheader("➕ Yeni Müşteri Kayıt Formu")
-    st.caption("Buradan eklenen müşteriler anında SQLite veritabanına yazılır ve kasa ekranından telefon/ID ile sorgulanabilir.")
+    st.caption("Buradan eklenen müşteriler anında kasa ekranından telefon/ID ile sorgulanabilir.")
 
     with st.form("yeni_musteri_formu", clear_on_submit=True):
         f_ad = st.text_input("Ad Soyad:")
@@ -808,11 +918,11 @@ with tab_yeni_musteri:
             f_mevsim = st.selectbox("Kayıt Mevsimi:", ["Yaz", "Kış", "İlkbahar", "Sonbahar"])
         f_segment = st.selectbox("Müşteri Segmenti:", ["Yeni Müşteri", "Standart Müşteri", "Sadık Müşteri", "VIP Müşteri"])
 
-        submit_btn = st.form_submit_button("💾 Müşteriyi Veritabanına Kaydet")
+        submit_btn = st.form_submit_button("💾 Müşteriyi Kaydet")
 
         if submit_btn:
             if f_ad and f_tel:
-                basari, mesaj, yeni_id = yeni_musteri_ekle(f_ad, f_tel, f_segment, f_cinsiyet, f_yas, f_magaza, f_mevsim, GENEL_MUSTERI_PROFILI)
+                basari, mesaj, yeni_id = yeni_musteri_ekle(f_ad, f_tel, f_segment, f_cinsiyet, f_yas, f_magaza, f_mevsim)
                 if basari:
                     st.success(f"✅ {mesaj} (Müşteri: {f_ad} — ID: {yeni_id})")
                     st.cache_data.clear()
